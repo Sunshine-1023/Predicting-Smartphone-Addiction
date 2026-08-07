@@ -1,4 +1,4 @@
-.PHONY: setup setup-update test test-model lint format build features train tune submission package help
+.PHONY: setup setup-update test test-model lint format build features validate-data train tune submission package help
 
 help:
 	@echo "Available targets:"
@@ -10,6 +10,7 @@ help:
 	@echo "  format        Auto-format with Ruff"
 	@echo "  build         Build wheel/sdist"
 	@echo "  features      Build processed parquet via CLI"
+	@echo "  validate-data Validate raw CSVs and write data_validation.md + EDA figures"
 	@echo "  train         Smoke train via CLI (catboost + smoke profile)"
 	@echo "  tune          Bounded Optuna tune via CLI"
 	@echo "  submission    Build submission CSV from RUN_DIR (required)"
@@ -40,6 +41,10 @@ build:
 
 features:
 	smartphone-addiction features build --raw-dir data/raw --out-dir data/processed
+
+validate-data:
+	smartphone-addiction data validate --data-dir data/raw
+	python scripts/write_data_validation_report.py
 
 train:
 	smartphone-addiction train \

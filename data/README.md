@@ -9,10 +9,24 @@
 - `data/processed/`：由本仓库特征流水线生成的 parquet / manifest  
   （大文件默认不进入 Git）
 
-请通过 Kaggle CLI 自行下载，并确保已接受比赛规则：
+## 安全下载（推荐）
 
 ```bash
-kaggle competitions download -c playground-series-s6e8 -p data/raw --force
+mkdir -p ~/.kaggle
+mv /path/to/downloaded/kaggle.json ~/.kaggle/kaggle.json
+chmod 600 ~/.kaggle/kaggle.json
+# 或新版 CLI：把 token 写入 ~/.kaggle/access_token 并 chmod 600
+
+kaggle competitions files -c playground-series-s6e8
+smartphone-addiction data download --output-dir data/raw
+smartphone-addiction data validate --data-dir data/raw
 ```
 
-切勿提交 `kaggle.json`、API Token 或原始数据到公开仓库。
+下载器会：检查凭据权限 → 下载到临时目录 → 只解压三份官方 CSV → 校验 → 原子写入 `data/raw` → 清理临时文件。  
+**切勿**把 `kaggle.json`、`access_token` 或原始 CSV 提交到公开仓库。
+
+生成校验报告与 EDA 图：
+
+```bash
+python scripts/write_data_validation_report.py
+```

@@ -18,7 +18,10 @@ from smartphone_addiction.data.load import CompetitionFrames
 from smartphone_addiction.data.schema import ID_COLUMN, TARGET_COLUMN
 from smartphone_addiction.errors import ArtifactError, TrainingError
 from smartphone_addiction.evaluation.metrics import summarize_oof
-from smartphone_addiction.features.base import transform_competition_frames
+from smartphone_addiction.features.base import (
+    select_feature_columns_from_groups,
+    transform_competition_frames,
+)
 from smartphone_addiction.models.catboost import build_catboost
 from smartphone_addiction.models.lightgbm import build_lightgbm
 from smartphone_addiction.training.cv import make_folds
@@ -67,6 +70,7 @@ def run_training(
     model_params: dict[str, Any] | None = None,
     feature_columns: list[str] | None = None,
     categorical_columns: list[str] | None = None,
+    feature_groups: list[str] | None = None,
     n_splits: int = 5,
     seeds: list[int] | None = None,
     git_sha: str = "localdev",
@@ -99,6 +103,7 @@ def run_training(
         test=test,
         feature_columns=feature_columns,
         categorical_columns=categorical_columns,
+        feature_groups=feature_groups,
     )
 
     computed_hashes = compute_training_data_hashes(train_df, test_df, feature_cols, cat_cols)
@@ -114,6 +119,7 @@ def run_training(
         "features": {
             "feature_columns": feature_cols,
             "categorical_columns": cat_cols,
+            "groups": list(feature_groups) if feature_groups is not None else None,
         },
         "n_train_rows": int(len(train_df)),
         "n_test_rows": int(len(test_df)),
@@ -405,13 +411,18 @@ def _resolve_frames(
     test: pd.DataFrame | None,
     feature_columns: list[str] | None,
     categorical_columns: list[str] | None,
+    feature_groups: list[str] | None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[str], list[str]]:
     if frames is not None:
         if isinstance(frames, CompetitionFrames):
             raw_train, raw_test = frames.train, frames.test
         else:
             raw_train, raw_test, _ = frames
-        transformed = transform_competition_frames(raw_train, raw_test)
+        transformed = transform_competition_frames(
+            raw_train,
+            raw_test,
+            groups=feature_groups,
+        )
         return (
             transformed.train,
             transformed.test,
@@ -426,11 +437,19 @@ def _resolve_frames(
         feature_columns = [
             column for column in train.columns if column not in {ID_COLUMN, TARGET_COLUMN}
         ]
+    if feature_groups is not None:
+        feature_columns = select_feature_columns_from_groups(feature_columns, feature_groups)
+        if not feature_columns:
+            raise TrainingError("feature_groups selected zero columns from the processed frame")
     if categorical_columns is None:
         categorical_columns = [
             column
             for column in feature_columns
             if train[column].dtype == object or str(train[column].dtype) == "string"
+        ]
+    else:
+        categorical_columns = [
+            column for column in categorical_columns if column in feature_columns
         ]
     missing = [column for column in feature_columns if column not in train.columns]
     if missing:

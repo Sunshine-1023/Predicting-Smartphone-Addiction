@@ -12,6 +12,7 @@ from sklearn.model_selection import StratifiedShuffleSplit
 
 from smartphone_addiction import __version__
 from smartphone_addiction.config import RunConfig, load_config
+from smartphone_addiction.data.download import download_competition, fingerprint_files
 from smartphone_addiction.data.load import CompetitionFrames, load_competition_frames
 from smartphone_addiction.data.schema import TARGET_COLUMN
 from smartphone_addiction.errors import (
@@ -27,6 +28,7 @@ from smartphone_addiction.evaluation.report import (
     write_final_report_scaffold,
 )
 from smartphone_addiction.features.base import transform_competition_frames
+from smartphone_addiction.features.domain import ALL_FEATURE_GROUPS
 from smartphone_addiction.features.io import write_processed_dataset
 from smartphone_addiction.kaggle_bundle import package_kaggle_bundle
 from smartphone_addiction.paths import project_root, resolve_path
@@ -150,29 +152,19 @@ def data_download(
     competition: str = typer.Option("playground-series-s6e8", help="Kaggle competition slug"),
     output_dir: Path = typer.Option(Path("data/raw"), "--output-dir", "-o"),
 ) -> None:
-    """Download official competition files via Kaggle CLI."""
+    """Securely download, extract, validate, and publish official CSVs."""
     root = project_root()
     target = resolve_path(output_dir, root)
-    target.mkdir(parents=True, exist_ok=True)
-    command = [
-        "kaggle",
-        "competitions",
-        "download",
-        "-c",
-        competition,
-        "-p",
-        str(target),
-        "--force",
-    ]
     try:
-        completed = subprocess.run(command, check=False, capture_output=True, text=True)
-    except FileNotFoundError:
-        _fail("kaggle CLI not found on PATH; install kaggle and configure credentials")
-    if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout or "").strip()
-        _fail(f"kaggle download failed\n{detail}")
-    typer.echo(f"Downloaded competition files into {target}")
-    typer.echo("If a zip was written, unzip it so train/test/sample_submission CSV exist.")
+        result = download_competition(competition, target)
+    except DOMAIN_ERRORS as exc:
+        _fail(str(exc))
+    typer.echo(f"destination={result['destination']}")
+    typer.echo(
+        f"rows train={result['n_train']} test={result['n_test']} sample={result['n_sample']}"
+    )
+    for name, digest in result["fingerprints"].items():
+        typer.echo(f"sha256 {name}={digest}")
 
 
 @data_app.command("validate")
@@ -180,14 +172,19 @@ def data_validate(
     data_dir: Path = typer.Option(Path("data/raw"), "--data-dir", "-d"),
 ) -> None:
     """Validate official train/test/sample_submission CSV files."""
+    root = project_root()
+    directory = resolve_path(data_dir, root)
     try:
-        frames = load_competition_frames(resolve_path(data_dir, project_root()))
+        frames = load_competition_frames(directory)
+        digests = fingerprint_files(directory)
     except DOMAIN_ERRORS as exc:
         _fail(str(exc))
     typer.echo(
         f"OK train={len(frames.train)} test={len(frames.test)} "
         f"sample={len(frames.sample_submission)}"
     )
+    for name, digest in digests.items():
+        typer.echo(f"sha256 {name}={digest}")
 
 
 @features_app.command("build")
@@ -195,12 +192,23 @@ def features_build(
     raw_dir: Path = typer.Option(Path("data/raw"), "--raw-dir"),
     out_dir: Path = typer.Option(Path("data/processed"), "--out-dir"),
     version: str = typer.Option("v1", "--version"),
+    groups: list[str] = typer.Option(
+        [],
+        "--group",
+        "-g",
+        help="Feature group to include (repeatable). Default: full production set.",
+    ),
 ) -> None:
     """Transform official CSV files into processed parquet features."""
     root = project_root()
+    selected = groups or list(ALL_FEATURE_GROUPS)
     try:
         frames = load_competition_frames(resolve_path(raw_dir, root))
-        transformed = transform_competition_frames(frames.train, frames.test)
+        transformed = transform_competition_frames(
+            frames.train,
+            frames.test,
+            groups=selected,
+        )
         paths = write_processed_dataset(
             transformed,
             resolve_path(out_dir, root),
@@ -208,6 +216,7 @@ def features_build(
         )
     except DOMAIN_ERRORS as exc:
         _fail(str(exc))
+    typer.echo(f"groups={','.join(transformed.feature_groups)}")
     typer.echo(
         f"features={len(transformed.feature_columns)} "
         f"train={len(transformed.train)} test={len(transformed.test)}"
@@ -270,6 +279,7 @@ def train(
                 test=test_df,
                 feature_columns=feature_columns,
                 categorical_columns=categorical_columns,
+                feature_groups=list(config.features.groups),
                 model_name=config.model.name,
                 model_params=model_params,
                 n_splits=config.cv.n_splits,
@@ -289,6 +299,7 @@ def train(
                 )
             result = run_training(
                 frames=frames,
+                feature_groups=list(config.features.groups),
                 model_name=config.model.name,
                 model_params=model_params,
                 n_splits=config.cv.n_splits,

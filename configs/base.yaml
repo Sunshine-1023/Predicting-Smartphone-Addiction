@@ -16,6 +16,7 @@ cv:
   seeds: [42]
 features:
   groups: [raw]
+
 model:
   name: catboost
   params: {}

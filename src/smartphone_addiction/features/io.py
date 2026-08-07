@@ -45,6 +45,7 @@ def write_processed_dataset(
         "feature_columns": list(frames.feature_columns),
         "categorical_columns": list(frames.categorical_columns),
         "numeric_columns": list(frames.numeric_columns),
+        "feature_groups": list(frames.feature_groups),
         "rules": {
             "numeric_missing": "keep_nan",
             "categorical_missing": MISSING_TOKEN,

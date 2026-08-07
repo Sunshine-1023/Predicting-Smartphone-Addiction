@@ -151,3 +151,180 @@ def add_categorical_interactions(frame: pd.DataFrame) -> pd.DataFrame:
     out["gender_x_impact"] = gender + sep + impact
     out["stress_x_impact"] = stress + sep + impact
     return out
+
+
+# --- Feature groups (plan task 4 + domain extensions) ---
+
+SUPPORTED_FEATURE_GROUPS: frozenset[str] = frozenset(
+    {
+        "raw",
+        "missingness",
+        "behavioral_totals",
+        "behavioral_ratios",
+        "behavioral_deltas",
+        "log_counts",
+        "categorical_interactions",
+    }
+)
+
+PLAN_FEATURE_GROUPS: frozenset[str] = frozenset(
+    {
+        "raw",
+        "missingness",
+        "behavioral_totals",
+        "behavioral_ratios",
+        "behavioral_deltas",
+    }
+)
+
+RAW_COLUMNS: list[str] = [
+    "age",
+    "daily_screen_time_hours",
+    "social_media_hours",
+    "gaming_hours",
+    "work_study_hours",
+    "sleep_hours",
+    "notifications_per_day",
+    "app_opens_per_day",
+    "weekend_screen_time",
+    "gender",
+    "stress_level",
+    "academic_work_impact",
+]
+
+MISSINGNESS_FLAG_COLUMNS: list[str] = [f"{column}_is_missing" for column in RAW_COLUMNS]
+MISSINGNESS_SUMMARY_COLUMNS: list[str] = [
+    "missing_count",
+    "missing_ratio",
+    "missing_pattern",
+]
+BEHAVIORAL_TOTAL_COLUMNS: list[str] = [
+    "entertainment_hours",
+    "work_minus_entertainment",
+    "known_usage_hours",
+    "unaccounted_screen_time",
+]
+BEHAVIORAL_RATIO_COLUMNS: list[str] = [
+    "screen_to_sleep_ratio",
+    "entertainment_to_screen_ratio",
+    "work_to_screen_ratio",
+    "weekend_to_daily_ratio",
+    "notifications_per_screen_hour",
+    "opens_per_screen_hour",
+    "opens_per_notification",
+]
+BEHAVIORAL_DELTA_COLUMNS: list[str] = [
+    "weekend_minus_daily",
+    "notifications_minus_opens",
+]
+LOG_COLUMNS: list[str] = ["log_notifications", "log_app_opens"]
+INTERACTION_COLUMNS: list[str] = [
+    "gender_x_stress",
+    "gender_x_impact",
+    "stress_x_impact",
+]
+
+GROUP_COLUMNS: dict[str, list[str]] = {
+    "raw": list(RAW_COLUMNS),
+    "missingness": [*MISSINGNESS_FLAG_COLUMNS, *MISSINGNESS_SUMMARY_COLUMNS],
+    "behavioral_totals": list(BEHAVIORAL_TOTAL_COLUMNS),
+    "behavioral_ratios": list(BEHAVIORAL_RATIO_COLUMNS),
+    "behavioral_deltas": list(BEHAVIORAL_DELTA_COLUMNS),
+    "log_counts": list(LOG_COLUMNS),
+    "categorical_interactions": list(INTERACTION_COLUMNS),
+}
+
+ALL_FEATURE_GROUPS: list[str] = [
+    "raw",
+    "missingness",
+    "behavioral_totals",
+    "behavioral_ratios",
+    "behavioral_deltas",
+    "log_counts",
+    "categorical_interactions",
+]
+
+
+def normalize_feature_groups(groups: list[str] | None) -> list[str]:
+    """Validate and expand feature groups; None means the full production set."""
+    if groups is None:
+        return list(ALL_FEATURE_GROUPS)
+    if not groups:
+        raise ValueError("feature groups must be a non-empty list")
+    unknown = [group for group in groups if group not in SUPPORTED_FEATURE_GROUPS]
+    if unknown:
+        raise ValueError(
+            f"unknown feature groups: {unknown}; "
+            f"supported={sorted(SUPPORTED_FEATURE_GROUPS)}"
+        )
+    # Preserve caller order but drop duplicates.
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for group in groups:
+        if group not in seen:
+            ordered.append(group)
+            seen.add(group)
+    if "raw" not in seen:
+        # Raw columns are always required as the base schema.
+        ordered = ["raw", *ordered]
+    return ordered
+
+
+def columns_for_groups(groups: list[str] | None) -> list[str]:
+    """Return feature column names for the selected groups in canonical order."""
+    selected = set(normalize_feature_groups(groups))
+    columns: list[str] = []
+    for group in ALL_FEATURE_GROUPS:
+        if group in selected:
+            columns.extend(GROUP_COLUMNS[group])
+    return columns
+
+
+def build_features(frame: pd.DataFrame, groups: list[str]) -> pd.DataFrame:
+    """Build selected feature groups without mutating the input frame.
+
+    Supported groups: raw, missingness, behavioral_totals, behavioral_ratios,
+    behavioral_deltas, plus optional log_counts and categorical_interactions.
+    Intermediate columns needed by ratios are computed when required but only
+    selected group columns are returned (plus always-filled raw categoricals).
+    """
+    from smartphone_addiction.data.schema import CATEGORICAL_COLUMNS
+
+    selected = normalize_feature_groups(groups)
+    selected_set = set(selected)
+    if frame.index.has_duplicates:
+        # Preserve index identity; duplicates are allowed but uncommon.
+        pass
+
+    working = frame.copy()
+    missing_raw = [column for column in RAW_COLUMNS if column not in working.columns]
+    if missing_raw:
+        raise ValueError(f"frame missing raw columns: {missing_raw}")
+
+    # Missingness must see original nulls before categorical fill.
+    if "missingness" in selected_set:
+        working = add_missingness_features(working, RAW_COLUMNS)
+
+    working = fill_categorical_missing(working, CATEGORICAL_COLUMNS)
+
+    need_totals = bool(
+        selected_set & {"behavioral_totals", "behavioral_ratios", "behavioral_deltas"}
+    )
+    # Ratios depend on entertainment_hours from totals.
+    if need_totals or "behavioral_ratios" in selected_set:
+        working = add_behavioral_totals(working)
+
+    if selected_set & {"behavioral_ratios", "behavioral_deltas"}:
+        working = add_ratio_and_delta_features(working)
+
+    if "log_counts" in selected_set:
+        working = add_log_count_features(working)
+
+    if "categorical_interactions" in selected_set:
+        working = add_categorical_interactions(working)
+
+    output_columns = columns_for_groups(selected)
+    missing_out = [column for column in output_columns if column not in working.columns]
+    if missing_out:
+        raise RuntimeError(f"build_features failed to produce columns: {missing_out}")
+    return working.loc[:, output_columns]

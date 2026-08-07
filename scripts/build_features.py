@@ -32,14 +32,21 @@ def parse_args() -> argparse.Namespace:
         help="Directory for parquet outputs and feature_manifest.json",
     )
     parser.add_argument("--version", default="v1", help="Feature pipeline version tag")
+    parser.add_argument(
+        "--group",
+        action="append",
+        default=None,
+        help="Feature group to include (repeatable). Default: full production set.",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     raw = load_competition_frames(args.raw_dir)
-    frames = transform_competition_frames(raw.train, raw.test)
+    frames = transform_competition_frames(raw.train, raw.test, groups=args.group)
     paths = write_processed_dataset(frames, args.out_dir, version=args.version)
+    print(f"groups={','.join(frames.feature_groups)}")
     print(f"train_rows={len(frames.train)} test_rows={len(frames.test)}")
     print(f"feature_count={len(frames.feature_columns)}")
     for key, path in paths.items():
