@@ -18,12 +18,13 @@ VALID_HASHES = {
 
 
 def test_run_lifecycle_is_recorded_atomically(tmp_path: Path) -> None:
-    store = ArtifactStore.create(tmp_path, slug="logistic-raw", git_sha="abc1234")
+    store = ArtifactStore.create(tmp_path, slug="logistic-raw", git_sha="abc1234", git_dirty=True)
     store.start(
         config={"model": {"name": "logistic"}},
         data_hashes=VALID_HASHES,
     )
     assert store.manifest().status == "running"
+    assert store.manifest().git_dirty is True
     store.complete(metrics={"oof_auc": 0.75})
     assert store.manifest().status == "completed"
     assert not list(store.run_dir.glob("*.tmp"))

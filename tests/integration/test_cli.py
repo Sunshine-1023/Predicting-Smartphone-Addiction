@@ -25,6 +25,9 @@ def test_cli_help_lists_primary_commands() -> None:
     assert "submission" in result.stdout
     assert "tune" in result.stdout
     assert "blend" in result.stdout
+    assert "evaluate-candidates" in result.stdout
+    assert "promote" in result.stdout
+    assert "importance" in result.stdout
     assert "report" in result.stdout
     assert "package" in result.stdout
 
@@ -55,6 +58,10 @@ def test_cli_submission_build(tmp_path: Path, competition_frames) -> None:
     _, test, sample = competition_frames
     run_dir = tmp_path / "run"
     run_dir.mkdir()
+    (run_dir / "manifest.json").write_text(
+        json.dumps({"status": "completed", "run_id": "cli-demo"}),
+        encoding="utf-8",
+    )
     pd.DataFrame(
         {
             ID_COLUMN: test[ID_COLUMN].to_numpy(),

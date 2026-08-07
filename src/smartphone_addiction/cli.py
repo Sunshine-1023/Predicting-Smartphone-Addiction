@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 
 import pandas as pd
@@ -23,20 +22,27 @@ from smartphone_addiction.errors import (
     TrainingError,
 )
 from smartphone_addiction.evaluation.blend import blend_run_predictions
+from smartphone_addiction.evaluation.importance import compute_run_importance
 from smartphone_addiction.evaluation.report import (
     append_runs_to_summary,
     write_final_report_scaffold,
 )
-from smartphone_addiction.features.base import transform_competition_frames
+from smartphone_addiction.features.base import (
+    select_feature_columns_from_groups,
+    transform_competition_frames,
+)
 from smartphone_addiction.features.domain import ALL_FEATURE_GROUPS
-from smartphone_addiction.features.io import write_processed_dataset
+from smartphone_addiction.features.io import feature_code_fingerprint, write_processed_dataset
+from smartphone_addiction.git_info import git_is_dirty, git_sha
 from smartphone_addiction.kaggle_bundle import package_kaggle_bundle
 from smartphone_addiction.paths import project_root, resolve_path
 from smartphone_addiction.submission import build_submission_from_run
 from smartphone_addiction.training.runner import run_training
 from smartphone_addiction.training.tuning import (
     TuningBudget,
+    evaluate_candidates,
     make_tuning_objective,
+    promote_candidate,
     run_tuning,
 )
 
@@ -71,19 +77,11 @@ def _fail(message: str, code: int = 1) -> None:
 
 
 def _git_sha() -> str:
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            check=False,
-            capture_output=True,
-            text=True,
-            cwd=project_root(),
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-    except OSError:
-        pass
-    return "nogit"
+    return git_sha()
+
+
+def _git_dirty() -> bool:
+    return git_is_dirty()
 
 
 def _collect_config_paths(
@@ -203,7 +201,8 @@ def features_build(
     root = project_root()
     selected = groups or list(ALL_FEATURE_GROUPS)
     try:
-        frames = load_competition_frames(resolve_path(raw_dir, root))
+        raw_path = resolve_path(raw_dir, root)
+        frames = load_competition_frames(raw_path)
         transformed = transform_competition_frames(
             frames.train,
             frames.test,
@@ -213,6 +212,7 @@ def features_build(
             transformed,
             resolve_path(out_dir, root),
             version=version,
+            raw_directory=raw_path,
         )
     except DOMAIN_ERRORS as exc:
         _fail(str(exc))
@@ -273,6 +273,13 @@ def train(
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
                 feature_columns = list(manifest["feature_columns"])
                 categorical_columns = list(manifest["categorical_columns"])
+                saved_code = (manifest.get("feature_code") or {}).get("digest")
+                current_code = feature_code_fingerprint()["digest"]
+                if saved_code and saved_code != current_code:
+                    _fail(
+                        "processed feature_code digest mismatch; "
+                        "rebuild with: smartphone-addiction features build"
+                    )
             train_df = _maybe_sample(train_df, config.data.sample_rows)
             result = run_training(
                 train=train_df,
@@ -286,6 +293,7 @@ def train(
                 seeds=list(config.cv.seeds),
                 artifact_root=Path(config.artifacts.directory),
                 git_sha=_git_sha(),
+                git_dirty=_git_dirty(),
                 resume_run_dir=resolve_path(resume_run_dir) if resume_run_dir else None,
                 slug=f"{config.model.name}-{Path(profile).stem if profile else 'base'}",
             )
@@ -306,6 +314,7 @@ def train(
                 seeds=list(config.cv.seeds),
                 artifact_root=Path(config.artifacts.directory),
                 git_sha=_git_sha(),
+                git_dirty=_git_dirty(),
                 resume_run_dir=resolve_path(resume_run_dir) if resume_run_dir else None,
                 slug=f"{config.model.name}-{Path(profile).stem if profile else 'base'}",
             )
@@ -360,9 +369,13 @@ def tune(
     experiment: Path | None = typer.Option(None, "--experiment", "-e"),
     override: list[str] = typer.Option([], "--override", "-o"),
     output_dir: Path = typer.Option(Path("artifacts/tuning"), "--output-dir"),
-    n_trials: int = typer.Option(20, "--n-trials"),
+    n_trials: int | None = typer.Option(
+        None,
+        "--n-trials",
+        help="Override tuning.n_trials from merged YAML (default: use config).",
+    ),
 ) -> None:
-    """Run bounded Optuna search (50% sample / 3-fold / seed 42 by default)."""
+    """Run bounded Optuna search using merged YAML (cv + tuning budget)."""
     root = project_root()
     try:
         config = _load_run_config(
@@ -378,15 +391,30 @@ def tune(
         if not train_path.is_file() or not manifest_path.is_file():
             _fail("processed train features missing; run features build first")
         train_df = pd.read_parquet(train_path)
+        train_df = _maybe_sample(train_df, config.data.sample_rows)
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        feature_columns = list(manifest["feature_columns"])
-        categorical_columns = list(manifest["categorical_columns"])
+        saved_code = (manifest.get("feature_code") or {}).get("digest")
+        current_code = feature_code_fingerprint()["digest"]
+        if saved_code and saved_code != current_code:
+            _fail(
+                "processed feature_code digest mismatch; "
+                "rebuild with: smartphone-addiction features build"
+            )
+        feature_columns = select_feature_columns_from_groups(
+            list(manifest["feature_columns"]),
+            list(config.features.groups),
+        )
+        if not feature_columns:
+            _fail("feature groups selected zero columns from the processed manifest")
+        categorical_columns = [
+            column for column in list(manifest["categorical_columns"]) if column in feature_columns
+        ]
         budget = TuningBudget(
-            sample_fraction=0.5,
-            n_splits=3,
-            seed=42,
-            n_trials=n_trials,
-            n_candidates=3,
+            sample_fraction=config.tuning.sample_fraction,
+            n_splits=config.cv.n_splits,
+            seed=int(config.cv.seeds[0]),
+            n_trials=n_trials if n_trials is not None else config.tuning.n_trials,
+            n_candidates=config.tuning.n_candidates,
         )
         objective = make_tuning_objective(
             model_name=config.model.name,
@@ -411,6 +439,148 @@ def tune(
     for path in result.candidate_yamls:
         typer.echo(f"candidate={path}")
     typer.echo("Optuna-stage scores are not final; re-run top candidates on full 5-fold CV.")
+
+
+@app.command("evaluate-candidates")
+def evaluate_candidates_cmd(
+    candidates: list[Path] = typer.Option(
+        ...,
+        "--candidate",
+        "-c",
+        help="Candidate YAML from tune (repeatable)",
+    ),
+    base: Path = typer.Option(Path("configs/base.yaml"), "--base"),
+    profile: Path | None = typer.Option(Path("configs/profiles/dev.yaml"), "--profile", "-p"),
+    model_config: Path | None = typer.Option(None, "--model-config", "-m"),
+    experiment: Path | None = typer.Option(None, "--experiment", "-e"),
+    override: list[str] = typer.Option([], "--override", "-o"),
+    output_dir: Path = typer.Option(Path("artifacts/tuning/evaluation"), "--output-dir"),
+) -> None:
+    """Re-evaluate Optuna candidates with full stratified OOF CV and rank them."""
+    root = project_root()
+    try:
+        config = _load_run_config(
+            base=base,
+            profile=profile,
+            model_config=model_config,
+            experiment=experiment,
+            override=override,
+        )
+        processed_dir = Path(config.data.processed_directory)
+        train_path = processed_dir / "train_features.parquet"
+        test_path = processed_dir / "test_features.parquet"
+        manifest_path = processed_dir / "feature_manifest.json"
+        if not train_path.is_file() or not test_path.is_file() or not manifest_path.is_file():
+            _fail("processed features missing; run features build first")
+        train_df = _maybe_sample(pd.read_parquet(train_path), config.data.sample_rows)
+        test_df = pd.read_parquet(test_path)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        feature_columns = select_feature_columns_from_groups(
+            list(manifest["feature_columns"]),
+            list(config.features.groups),
+        )
+        categorical_columns = [
+            column for column in list(manifest["categorical_columns"]) if column in feature_columns
+        ]
+        result = evaluate_candidates(
+            candidate_yamls=[resolve_path(path, root) for path in candidates],
+            train=train_df,
+            test=test_df,
+            feature_columns=feature_columns,
+            categorical_columns=categorical_columns,
+            feature_groups=list(config.features.groups),
+            artifact_root=Path(config.artifacts.directory),
+            output_dir=resolve_path(output_dir, root),
+            n_splits=config.cv.n_splits,
+            seeds=list(config.cv.seeds),
+            git_sha=_git_sha(),
+            git_dirty=_git_dirty(),
+        )
+    except DOMAIN_ERRORS as exc:
+        _fail(str(exc))
+    except Exception as exc:
+        _fail(f"evaluate-candidates failed: {exc}")
+    typer.echo(f"selection={result.selection_json}")
+    typer.echo(f"ranking={result.ranking_csv}")
+    typer.echo(f"selected_yaml={result.selected_yaml}")
+    typer.echo(f"best_oof_auc={result.rows[0]['oof_auc']}")
+
+
+@app.command("promote")
+def promote_cmd(
+    selection: Path = typer.Option(
+        ..., "--selection", help="selection.json from evaluate-candidates"
+    ),
+    output: Path = typer.Option(
+        ...,
+        "--output",
+        "-o",
+        help="Destination experiment YAML (e.g. configs/experiments/catboost_final_v2.yaml)",
+    ),
+    template: Path | None = typer.Option(
+        None,
+        "--template",
+        "-t",
+        help="Optional template experiment YAML (features/groups preserved)",
+    ),
+) -> None:
+    """Write a train-ready experiment YAML from an evaluate-candidates selection."""
+    root = project_root()
+    try:
+        path = promote_candidate(
+            selection_json=resolve_path(selection, root),
+            output_yaml=resolve_path(output, root),
+            template_yaml=resolve_path(template, root) if template else None,
+        )
+    except DOMAIN_ERRORS as exc:
+        _fail(str(exc))
+    except Exception as exc:
+        _fail(f"promote failed: {exc}")
+    typer.echo(f"experiment={path}")
+    typer.echo(f"meta={path.with_suffix('.meta.json')}")
+
+
+@app.command("importance")
+def importance_cmd(
+    run_dir: Path = typer.Option(..., "--run", help="Completed training run directory"),
+    processed_dir: Path = typer.Option(
+        Path("data/processed"),
+        "--processed-dir",
+        help="Directory with train_features.parquet",
+    ),
+    fold_key: str | None = typer.Option(
+        None,
+        "--fold-key",
+        help="Optional single fold (default: all saved folds, validation rows only)",
+    ),
+    sample_rows: int | None = typer.Option(5_000, "--sample-rows"),
+    n_repeats: int = typer.Option(5, "--n-repeats"),
+    seed: int = typer.Option(42, "--seed"),
+) -> None:
+    """Compute fold-local permutation importance for a completed training run."""
+    root = project_root()
+    try:
+        train_path = resolve_path(processed_dir, root) / "train_features.parquet"
+        if not train_path.is_file():
+            _fail(f"missing processed train features: {train_path}")
+        train_df = pd.read_parquet(train_path)
+        summary = compute_run_importance(
+            run_dir=resolve_path(run_dir, root),
+            train=train_df,
+            fold_key=fold_key,
+            n_repeats=n_repeats,
+            sample_rows=sample_rows,
+            seed=seed,
+        )
+    except DOMAIN_ERRORS as exc:
+        _fail(str(exc))
+    except Exception as exc:
+        _fail(f"importance failed: {exc}")
+    typer.echo(f"rows={len(summary)}")
+    if not summary.empty:
+        top = summary.iloc[0]
+        typer.echo(f"top_feature={top['feature']} importance={top['importance_mean']:.6f}")
+    typer.echo(f"summary={resolve_path(run_dir, root) / 'importance' / 'summary.csv'}")
 
 
 @app.command("blend")
@@ -478,15 +648,26 @@ def package_kaggle(
         "--config",
         help="Experiment YAML included in the offline bundle",
     ),
+    base: Path = typer.Option(Path("configs/base.yaml"), "--base"),
+    profile: Path = typer.Option(Path("configs/profiles/final.yaml"), "--profile", "-p"),
+    model_config: Path | None = typer.Option(
+        None,
+        "--model-config",
+        "-m",
+        help="Model YAML; defaults to configs/models/<experiment model.name>.yaml",
+    ),
     dist_dir: Path = typer.Option(Path("dist"), "--dist-dir"),
 ) -> None:
-    """Build wheel + deterministic zip for offline Kaggle execution."""
+    """Build wheel + configs + deterministic zip for offline Kaggle execution."""
     root = project_root()
     try:
         paths = package_kaggle_bundle(
             config_path=resolve_path(config, root),
             root=root,
             dist_dir=resolve_path(dist_dir, root),
+            base_path=resolve_path(base, root),
+            profile_path=resolve_path(profile, root),
+            model_config_path=resolve_path(model_config, root) if model_config else None,
         )
     except Exception as exc:
         _fail(f"package failed: {exc}")

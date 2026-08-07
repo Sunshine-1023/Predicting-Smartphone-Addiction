@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from smartphone_addiction.errors import ConfigurationError
 from smartphone_addiction.paths import project_root, resolve_path
@@ -77,6 +77,30 @@ class FeatureConfig(BaseModel):
     groups: list[str] = Field(default_factory=lambda: ["raw"])
 
 
+class TuningConfig(BaseModel):
+    """Bounded Optuna search budget (distinct from full final CV)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sample_fraction: float = 0.5
+    n_trials: int = 20
+    n_candidates: int = 3
+
+    @field_validator("sample_fraction")
+    @classmethod
+    def _sample_fraction_range(cls, value: float) -> float:
+        if not 0.0 < value <= 1.0:
+            raise ValueError("tuning.sample_fraction must be in (0, 1]")
+        return value
+
+    @field_validator("n_trials", "n_candidates")
+    @classmethod
+    def _positive_int(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("must be >= 1")
+        return value
+
+
 class ModelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -105,6 +129,7 @@ class RunConfig(BaseModel):
     cv: CVConfig
     features: FeatureConfig
     model: ModelConfig
+    tuning: TuningConfig = Field(default_factory=TuningConfig)
 
     def resolve_paths(self, root: Path | None = None) -> RunConfig:
         """Return a copy with data/artifact directories resolved to absolute paths."""
@@ -187,7 +212,7 @@ def load_config(
 
     try:
         config = RunConfig.model_validate(merged)
-    except Exception as exc:  # noqa: BLE001 - wrap pydantic errors
+    except Exception as exc:
         raise ConfigurationError(str(exc)) from exc
 
     if resolve:

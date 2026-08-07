@@ -17,13 +17,17 @@ from smartphone_addiction.data.download import (
 from smartphone_addiction.errors import DataValidationError
 
 
-def test_download_uses_expected_competition_and_directory(tmp_path: Path) -> None:
+def test_download_uses_expected_competition_and_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     calls: list[list[str]] = []
 
     def fake_run(command: list[str], **_: object) -> CompletedProcess[str]:
         calls.append(command)
         return CompletedProcess(command, 0, stdout="ok", stderr="")
 
+    # Simulate a clean CI PATH with no kaggle CLI; injected runners must still work.
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
     download_competition(
         "playground-series-s6e8",
         tmp_path,
@@ -47,9 +51,11 @@ def test_download_uses_expected_competition_and_directory(tmp_path: Path) -> Non
 def test_download_extracts_validates_and_publishes(
     tmp_path: Path,
     competition_frames,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     train, test, sample = competition_frames
     dest = tmp_path / "raw"
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
 
     def fake_run(command: list[str], **_: object) -> CompletedProcess[str]:
         download_dir = Path(command[6])
@@ -90,3 +96,16 @@ def test_credential_rejects_world_readable(tmp_path: Path, monkeypatch: pytest.M
 def test_fingerprint_requires_files(tmp_path: Path) -> None:
     with pytest.raises(DataValidationError, match="missing competition file"):
         fingerprint_files(tmp_path)
+
+
+def test_download_without_runner_requires_kaggle_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    with pytest.raises(DataValidationError, match="kaggle CLI not found"):
+        download_competition(
+            "playground-series-s6e8",
+            tmp_path,
+            credential_check=False,
+            extract_and_validate=False,
+        )

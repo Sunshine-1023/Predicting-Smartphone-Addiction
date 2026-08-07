@@ -254,8 +254,7 @@ def normalize_feature_groups(groups: list[str] | None) -> list[str]:
     unknown = [group for group in groups if group not in SUPPORTED_FEATURE_GROUPS]
     if unknown:
         raise ValueError(
-            f"unknown feature groups: {unknown}; "
-            f"supported={sorted(SUPPORTED_FEATURE_GROUPS)}"
+            f"unknown feature groups: {unknown}; supported={sorted(SUPPORTED_FEATURE_GROUPS)}"
         )
     # Preserve caller order but drop duplicates.
     seen: set[str] = set()

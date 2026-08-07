@@ -76,9 +76,7 @@ def _require_kaggle_on_path() -> None:
 
 def _translate_kaggle_failure(stderr: str, stdout: str) -> str:
     text = f"{stderr}\n{stdout}".lower()
-    if "401" in text or "unauthorized" in text or (
-        "invalid" in text and "credential" in text
-    ):
+    if "401" in text or "unauthorized" in text or ("invalid" in text and "credential" in text):
         return (
             "Kaggle authentication failed. Check ~/.kaggle/kaggle.json "
             "(chmod 600) or access_token and regenerate the API token if needed."
@@ -144,7 +142,9 @@ def download_competition(
     Never logs credential contents. Always cleans temporary files.
     """
     destination = Path(destination)
-    _require_kaggle_on_path()
+    # Injected runners (unit tests) skip the PATH probe; real downloads still require CLI.
+    if runner is None:
+        _require_kaggle_on_path()
     check_kaggle_credentials(credential_check=credential_check)
 
     run = runner or _default_runner

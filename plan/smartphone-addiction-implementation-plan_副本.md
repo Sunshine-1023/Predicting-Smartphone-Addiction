@@ -236,11 +236,13 @@ from smartphone_addiction.errors import ConfigurationError
 
 
 def test_final_profile_has_expected_seeds() -> None:
-    config = load_config([
-        Path("configs/base.yaml"),
-        Path("configs/profiles/final.yaml"),
-        Path("configs/models/catboost.yaml"),
-    ])
+    config = load_config(
+        [
+            Path("configs/base.yaml"),
+            Path("configs/profiles/final.yaml"),
+            Path("configs/models/catboost.yaml"),
+        ]
+    )
     assert config.cv == CVConfig(n_splits=5, seeds=[42, 2026, 3407])
 
 
@@ -441,16 +443,18 @@ def test_download_uses_expected_competition_and_directory(tmp_path: Path) -> Non
         credential_check=False,
         extract_and_validate=False,
     )
-    assert calls == [[
-        "kaggle",
-        "competitions",
-        "download",
-        "-c",
-        "playground-series-s6e8",
-        "-p",
-        str(tmp_path),
-        "--force",
-    ]]
+    assert calls == [
+        [
+            "kaggle",
+            "competitions",
+            "download",
+            "-c",
+            "playground-series-s6e8",
+            "-p",
+            str(tmp_path),
+            "--force",
+        ]
+    ]
 ~~~
 
 - [ ] **步骤 5：实现安全下载器**
@@ -519,20 +523,22 @@ def test_safe_divide_rejects_zero_and_preserves_missing() -> None:
 
 
 def test_feature_groups_are_explicit() -> None:
-    frame = pd.DataFrame({
-        "daily_screen_time_hours": [8.0],
-        "social_media_hours": [2.0],
-        "gaming_hours": [1.0],
-        "work_study_hours": [3.0],
-        "sleep_hours": [4.0],
-        "notifications_per_day": [80.0],
-        "app_opens_per_day": [40.0],
-        "weekend_screen_time": [10.0],
-        "age": [20.0],
-        "gender": ["Female"],
-        "stress_level": ["Medium"],
-        "academic_work_impact": ["No"],
-    })
+    frame = pd.DataFrame(
+        {
+            "daily_screen_time_hours": [8.0],
+            "social_media_hours": [2.0],
+            "gaming_hours": [1.0],
+            "work_study_hours": [3.0],
+            "sleep_hours": [4.0],
+            "notifications_per_day": [80.0],
+            "app_opens_per_day": [40.0],
+            "weekend_screen_time": [10.0],
+            "age": [20.0],
+            "gender": ["Female"],
+            "stress_level": ["Medium"],
+            "academic_work_impact": ["No"],
+        }
+    )
     result = build_features(frame, ["raw", "missingness", "behavioral_ratios"])
     assert result.loc[0, "screen_to_sleep_ratio"] == 2.0
     assert result.loc[0, "missing_count"] == 0

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -59,4 +60,8 @@ def test_blend_run_predictions_writes_artifacts(tmp_path: Path) -> None:
     assert (out / "oof_predictions.parquet").is_file()
     assert (out / "test_predictions.parquet").is_file()
     assert (out / "blend_result.json").is_file()
+    assert (out / "manifest.json").is_file()
+    manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "completed"
+    assert manifest["artifact_type"] == "blend"
     assert payload["auc"] >= 0.5

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import optuna
@@ -11,6 +12,7 @@ import yaml
 from smartphone_addiction.training.tuning import (
     TuningBudget,
     export_top_candidates,
+    promote_candidate,
     run_tuning,
     suggest_catboost_params,
     suggest_lightgbm_params,
@@ -36,9 +38,25 @@ def test_deterministic_fake_study(tmp_path: Path) -> None:
     assert len(result.candidate_yamls) == 3
     assert len(result.top_params) == 3
     values = [yaml.safe_load(path.read_text(encoding="utf-8")) for path in result.candidate_yamls]
-    scores = [item["tuning"]["optuna_value"] for item in values]
+    scores = []
+    for path in result.candidate_yamls:
+        meta = json.loads(path.with_name(path.stem + ".meta.json").read_text(encoding="utf-8"))
+        scores.append(meta["optuna_value"])
     assert scores == sorted(scores, reverse=True)
     assert values[0]["model"]["name"] == "catboost"
+    assert "tuning" not in values[0]
+
+    # Candidate YAML must be mergeable into a strict RunConfig.
+    from smartphone_addiction.config import load_config
+    from smartphone_addiction.paths import project_root
+
+    root = project_root()
+    config = load_config(
+        [root / "configs/base.yaml", result.candidate_yamls[0]],
+        resolve=False,
+    )
+    assert config.model.name == "catboost"
+    assert "x" in config.model.params
 
 
 def test_search_spaces_do_not_include_seed_or_folds() -> None:
@@ -77,3 +95,39 @@ def test_export_top_candidates_ranks_by_score(tmp_path: Path) -> None:
     )
     assert len(top_params) == 3
     assert all(path.is_file() for path in paths)
+    assert all(path.with_name(path.stem + ".meta.json").is_file() for path in paths)
+
+
+def test_promote_candidate_writes_train_ready_yaml(tmp_path: Path) -> None:
+    candidate = tmp_path / "candidate_1.yaml"
+    candidate.write_text(
+        "model:\n  name: catboost\n  params:\n    depth: 7\n    learning_rate: 0.03\n",
+        encoding="utf-8",
+    )
+    selected = tmp_path / "selected_final.yaml"
+    selected.write_text(
+        "features:\n  groups: [raw, missingness]\n"
+        "model:\n  name: catboost\n  params:\n    depth: 7\n",
+        encoding="utf-8",
+    )
+    selection = tmp_path / "selection.json"
+    selection.write_text(
+        json.dumps(
+            {
+                "best": {
+                    "candidate_yaml": str(candidate),
+                    "oof_auc": 0.9,
+                    "run_dir": str(tmp_path / "run"),
+                },
+                "selected_yaml": str(selected),
+            }
+        ),
+        encoding="utf-8",
+    )
+    out = tmp_path / "catboost_final_v2.yaml"
+    path = promote_candidate(selection_json=selection, output_yaml=out)
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert payload["model"]["params"]["depth"] == 7
+    assert payload["features"]["groups"] == ["raw", "missingness"]
+    assert "selection" not in payload
+    assert path.with_suffix(".meta.json").is_file()

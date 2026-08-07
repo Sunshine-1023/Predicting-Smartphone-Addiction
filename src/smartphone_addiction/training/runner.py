@@ -16,7 +16,7 @@ import pandas as pd
 from smartphone_addiction.artifacts.store import ArtifactStore
 from smartphone_addiction.data.load import CompetitionFrames
 from smartphone_addiction.data.schema import ID_COLUMN, TARGET_COLUMN
-from smartphone_addiction.errors import ArtifactError, TrainingError
+from smartphone_addiction.errors import ArtifactError, DataValidationError, TrainingError
 from smartphone_addiction.evaluation.metrics import summarize_oof
 from smartphone_addiction.features.base import (
     select_feature_columns_from_groups,
@@ -74,6 +74,7 @@ def run_training(
     n_splits: int = 5,
     seeds: list[int] | None = None,
     git_sha: str = "localdev",
+    git_dirty: bool = False,
     resume_run_dir: Path | None = None,
     data_hashes: dict[str, str] | None = None,
     slug: str | None = None,
@@ -121,8 +122,8 @@ def run_training(
             "categorical_columns": cat_cols,
             "groups": list(feature_groups) if feature_groups is not None else None,
         },
-        "n_train_rows": int(len(train_df)),
-        "n_test_rows": int(len(test_df)),
+        "n_train_rows": len(train_df),
+        "n_test_rows": len(test_df),
     }
     expected_fold_keys = [_fold_key(seed, fold_id) for seed in seeds for fold_id in range(n_splits)]
 
@@ -154,6 +155,7 @@ def run_training(
             artifact_root=Path(artifact_root),
             slug=slug or f"{model_name}-oof",
             git_sha=git_sha,
+            git_dirty=git_dirty,
         )
         store.start(
             config=config,
@@ -381,9 +383,9 @@ def _aggregate_and_write(
         "n_splits": n_splits,
         "seeds": seeds,
         "model_name": model_name,
-        "n_train_rows": int(len(ids)),
-        "n_test_rows": int(len(test_ids)),
-        "n_features": int(len(feature_cols)),
+        "n_train_rows": len(ids),
+        "n_test_rows": len(test_ids),
+        "n_features": len(feature_cols),
     }
 
     store.write_frame(
@@ -438,14 +440,25 @@ def _resolve_frames(
             column for column in train.columns if column not in {ID_COLUMN, TARGET_COLUMN}
         ]
     if feature_groups is not None:
-        feature_columns = select_feature_columns_from_groups(feature_columns, feature_groups)
+        try:
+            feature_columns = select_feature_columns_from_groups(
+                feature_columns,
+                feature_groups,
+                require_all=True,
+            )
+        except DataValidationError as exc:
+            raise TrainingError(str(exc)) from exc
         if not feature_columns:
             raise TrainingError("feature_groups selected zero columns from the processed frame")
     if categorical_columns is None:
         categorical_columns = [
             column
             for column in feature_columns
-            if train[column].dtype == object or str(train[column].dtype) == "string"
+            if (
+                train[column].dtype == object
+                or str(train[column].dtype) == "string"
+                or isinstance(train[column].dtype, pd.CategoricalDtype)
+            )
         ]
     else:
         categorical_columns = [

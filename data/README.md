@@ -4,9 +4,9 @@
 
 ## 约定
 
-- `data/raw/`：只读官方文件  
+- `data/raw/`：只读官方文件
   `train.csv`、`test.csv`、`sample_submission.csv`
-- `data/processed/`：由本仓库特征流水线生成的 parquet / manifest  
+- `data/processed/`：由本仓库特征流水线生成的 parquet / manifest
   （大文件默认不进入 Git）
 
 ## 安全下载（推荐）
@@ -22,7 +22,7 @@ smartphone-addiction data download --output-dir data/raw
 smartphone-addiction data validate --data-dir data/raw
 ```
 
-下载器会：检查凭据权限 → 下载到临时目录 → 只解压三份官方 CSV → 校验 → 原子写入 `data/raw` → 清理临时文件。  
+下载器会：检查凭据权限 → 下载到临时目录 → 只解压三份官方 CSV → 校验 → 原子写入 `data/raw` → 清理临时文件。
 **切勿**把 `kaggle.json`、`access_token` 或原始 CSV 提交到公开仓库。
 
 生成校验报告与 EDA 图：

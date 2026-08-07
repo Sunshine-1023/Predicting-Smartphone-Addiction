@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -11,10 +12,12 @@ import pandas as pd
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedShuffleSplit
 
-from smartphone_addiction.data.schema import TARGET_COLUMN
+from smartphone_addiction.data.schema import ID_COLUMN, TARGET_COLUMN
 from smartphone_addiction.errors import TrainingError
 from smartphone_addiction.models.catboost import CatBoostAdapter
 from smartphone_addiction.models.lightgbm import LightGBMAdapter
+
+_FOLD_KEY_RE = re.compile(r"^seed(?P<seed>\d+)-fold(?P<fold>\d+)$")
 
 
 class PredictProbaModel(Protocol):
@@ -127,53 +130,148 @@ def load_fold_model(
     raise TrainingError(f"no saved model found for fold_key={fold_key!r} under {run_dir}")
 
 
+def list_fold_keys(run_dir: Path | str) -> list[str]:
+    """Return fold keys that have a saved model under the run directory."""
+    models_dir = Path(run_dir) / "models"
+    if not models_dir.is_dir():
+        return []
+    keys: list[str] = []
+    for path in sorted(models_dir.iterdir()):
+        if path.suffix in {".cbm", ".joblib"}:
+            keys.append(path.stem)
+    return keys
+
+
+def validation_frame_for_fold(
+    train: pd.DataFrame,
+    run_dir: Path | str,
+    fold_key: str,
+) -> pd.DataFrame:
+    """Return the out-of-fold validation rows for a saved fold model."""
+    match = _FOLD_KEY_RE.match(fold_key)
+    if match is None:
+        raise TrainingError(f"invalid fold_key={fold_key!r}; expected seedN-foldM")
+    seed = int(match.group("seed"))
+    fold_id = int(match.group("fold"))
+    run_dir = Path(run_dir)
+    fold_path = run_dir / f"folds_seed{seed}.parquet"
+    if not fold_path.is_file():
+        raise TrainingError(f"missing fold assignment file: {fold_path}")
+    folds = pd.read_parquet(fold_path)
+    if ID_COLUMN not in folds.columns or "fold" not in folds.columns:
+        raise TrainingError(f"folds file must contain {ID_COLUMN} and fold columns")
+    if ID_COLUMN not in train.columns:
+        raise TrainingError("train frame must include id for fold alignment")
+    valid_ids = set(folds.loc[folds["fold"] == fold_id, ID_COLUMN].tolist())
+    if not valid_ids:
+        raise TrainingError(f"no validation rows for {fold_key}")
+    subset = train.loc[train[ID_COLUMN].isin(valid_ids)].reset_index(drop=True)
+    if len(subset) != len(valid_ids):
+        raise TrainingError(
+            f"train ids do not cover validation fold {fold_key}: "
+            f"expected {len(valid_ids)} rows, got {len(subset)}"
+        )
+    return subset
+
+
 def compute_run_importance(
     *,
     run_dir: Path | str,
     train: pd.DataFrame,
-    fold_key: str = "seed42-fold0",
+    fold_key: str | None = None,
     n_repeats: int = 5,
     sample_rows: int | None = 5_000,
     seed: int = 42,
 ) -> pd.DataFrame:
-    """Compute permutation importance for one run and write CSV under importance/."""
+    """Compute fold-local permutation importance and write CSV under importance/.
+
+    When ``fold_key`` is None, every saved fold model is evaluated on its own
+    validation rows and results are averaged into a summary CSV.
+    """
     run_dir = Path(run_dir)
-    model, feature_columns, _ = load_fold_model(run_dir, fold_key=fold_key)
     if TARGET_COLUMN not in train.columns:
         raise TrainingError("train frame must include the target column")
-    frame = permutation_importance_auc(
-        model,
-        train,
-        train[TARGET_COLUMN].to_numpy(),
-        feature_columns,
-        n_repeats=n_repeats,
-        sample_rows=sample_rows,
-        seed=seed,
-        run_id=run_dir.name,
-    )
+
+    fold_keys = [fold_key] if fold_key is not None else list_fold_keys(run_dir)
+    if not fold_keys:
+        raise TrainingError(f"no fold models found under {run_dir / 'models'}")
+
     out_dir = run_dir / "importance"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"permutation_{fold_key}.csv"
-    frame.to_csv(out_path, index=False)
-    meta = {
-        "run_id": run_dir.name,
-        "fold_key": fold_key,
-        "n_repeats": n_repeats,
-        "sample_rows": sample_rows,
-        "seed": seed,
-        "output": str(out_path),
-    }
-    (out_dir / f"permutation_{fold_key}.meta.json").write_text(
-        json.dumps(meta, indent=2) + "\n",
+    per_fold_frames: list[pd.DataFrame] = []
+
+    for key in fold_keys:
+        model, feature_columns, _ = load_fold_model(run_dir, fold_key=key)
+        valid = validation_frame_for_fold(train, run_dir, key)
+        frame = permutation_importance_auc(
+            model,
+            valid,
+            valid[TARGET_COLUMN].to_numpy(),
+            feature_columns,
+            n_repeats=n_repeats,
+            sample_rows=sample_rows,
+            seed=seed,
+            run_id=run_dir.name,
+        )
+        frame = frame.copy()
+        frame["fold_key"] = key
+        per_fold_path = out_dir / f"permutation_{key}.csv"
+        frame.to_csv(per_fold_path, index=False)
+        meta = {
+            "run_id": run_dir.name,
+            "fold_key": key,
+            "n_repeats": n_repeats,
+            "sample_rows": sample_rows,
+            "seed": seed,
+            "n_valid_rows": len(valid),
+            "output": str(per_fold_path),
+            "scope": "validation_fold_only",
+        }
+        (out_dir / f"permutation_{key}.meta.json").write_text(
+            json.dumps(meta, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        per_fold_frames.append(frame)
+
+    combined = pd.concat(per_fold_frames, ignore_index=True)
+    combined.to_csv(out_dir / "per_fold.csv", index=False)
+    summary = (
+        combined.groupby("feature", as_index=False)
+        .agg(
+            importance_mean=("importance_mean", "mean"),
+            importance_std=("importance_mean", "std"),
+            folds_evaluated=("fold_key", "nunique"),
+            baseline_auc_mean=("baseline_auc", "mean"),
+        )
+        .sort_values("importance_mean", ascending=False)
+        .reset_index(drop=True)
+    )
+    summary["importance_std"] = summary["importance_std"].fillna(0.0)
+    summary.to_csv(out_dir / "summary.csv", index=False)
+    (out_dir / "meta.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_dir.name,
+                "fold_keys": fold_keys,
+                "n_repeats": n_repeats,
+                "sample_rows": sample_rows,
+                "seed": seed,
+                "scope": "validation_fold_only",
+            },
+            indent=2,
+        )
+        + "\n",
         encoding="utf-8",
     )
-    return frame
+    return summary
 
 
 # Re-export for tests and CLI helpers.
 __all__ = [
     "compute_run_importance",
+    "list_fold_keys",
     "load_fold_model",
     "permutation_importance_auc",
     "stratified_feature_sample",
+    "validation_frame_for_fold",
 ]

@@ -17,3 +17,7 @@ data:
   sample_rows: null
 runtime:
   threads: 4
+tuning:
+  sample_fraction: 0.5
+  n_trials: 20
+  n_candidates: 3

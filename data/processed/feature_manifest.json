@@ -51,11 +51,11 @@
     "screen_to_sleep_ratio",
     "entertainment_to_screen_ratio",
     "work_to_screen_ratio",
-    "weekend_minus_daily",
     "weekend_to_daily_ratio",
     "notifications_per_screen_hour",
     "opens_per_screen_hour",
     "opens_per_notification",
+    "weekend_minus_daily",
     "notifications_minus_opens",
     "log_notifications",
     "log_app_opens",
@@ -103,15 +103,39 @@
     "screen_to_sleep_ratio",
     "entertainment_to_screen_ratio",
     "work_to_screen_ratio",
-    "weekend_minus_daily",
     "weekend_to_daily_ratio",
     "notifications_per_screen_hour",
     "opens_per_screen_hour",
     "opens_per_notification",
+    "weekend_minus_daily",
     "notifications_minus_opens",
     "log_notifications",
     "log_app_opens"
   ],
+  "feature_groups": [
+    "raw",
+    "missingness",
+    "behavioral_totals",
+    "behavioral_ratios",
+    "behavioral_deltas",
+    "log_counts",
+    "categorical_interactions"
+  ],
+  "source_hashes": {
+    "train.csv": "f4669147311c76eb03496061a852af283efcf0f12cf5c19274e775def81edd9c",
+    "test.csv": "8b462dd47fe8165cd0b082bf33b56523c5811453070af48b9f86b2eb928de49e",
+    "sample_submission.csv": "206763fe5786fb9c80d4e9289a3b812030d3dbb36450c6eb63348098154ce63e"
+  },
+  "feature_code": {
+    "package_version": "0.1.0",
+    "files": {
+      "data/schema.py": "c557906fe5efc876cd86f911dc221707a9c8e6e127937328ff36fa69e745a3e0",
+      "features/base.py": "4c882f0ec39a908c1b6f67d1858a1ff4597dc1902f742fe9fab78845b254e14f",
+      "features/domain.py": "c7c7fbdced7e062c122d155902461c7bf4e75cd70191b18cece64caa418b9cbe",
+      "features/io.py": "e87980dcf014917049fe3edd2982f5c714d4ae311b45febe5a2fb092ec45faa2"
+    },
+    "digest": "be174c250984fdae3e51d85a8e4b0af287733f9143a11fbed5d808fb34274652"
+  },
   "rules": {
     "numeric_missing": "keep_nan",
     "categorical_missing": "__MISSING__",

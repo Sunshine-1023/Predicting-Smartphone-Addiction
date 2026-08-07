@@ -20,10 +20,16 @@ def test_build_features_end_to_end(tmp_path: Path, competition_frames) -> None:
 
     frames = load_competition_frames(raw_dir)
     transformed = transform_competition_frames(frames.train, frames.test)
-    write_processed_dataset(transformed, out_dir, version="v1")
+    write_processed_dataset(transformed, out_dir, version="v1", raw_directory=raw_dir)
 
     loaded_train, loaded_test, manifest = read_processed_dataset(out_dir)
     assert len(loaded_train) == len(train)
     assert len(loaded_test) == len(test)
     assert "addicted_label" not in manifest["feature_columns"]
     assert loaded_train["id"].tolist() == train["id"].tolist()
+    assert set(manifest["source_hashes"]) == {
+        "train.csv",
+        "test.csv",
+        "sample_submission.csv",
+    }
+    assert len(manifest["feature_code"]["digest"]) == 64

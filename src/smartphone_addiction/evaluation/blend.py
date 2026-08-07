@@ -200,13 +200,30 @@ def blend_run_predictions(
         json.dumps(payload, indent=2) + "\n",
         encoding="utf-8",
     )
+    metrics = {
+        "oof_auc": result.auc,
+        "model_name": f"blend-{result.method}",
+        "first_weight": result.first_weight,
+        "second_weight": result.second_weight,
+        "method": result.method,
+        "first_auc": result.first_auc,
+        "second_auc": result.second_auc,
+        "correlation": result.correlation,
+    }
     (output_dir / "metrics.json").write_text(
+        json.dumps(metrics, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    # Minimal completed manifest so `submission build --run <blend_dir>` works.
+    (output_dir / "manifest.json").write_text(
         json.dumps(
             {
-                "oof_auc": result.auc,
-                "model_name": f"blend-{result.method}",
-                "first_weight": result.first_weight,
-                "second_weight": result.second_weight,
+                "run_id": output_dir.name,
+                "slug": "blend",
+                "status": "completed",
+                "artifact_type": "blend",
+                "source_runs": [str(first_dir), str(second_dir)],
+                "metrics": metrics,
             },
             indent=2,
         )

@@ -83,3 +83,35 @@ def test_build_features_does_not_mutate_input() -> None:
     original = frame.copy()
     _ = build_features(frame, ["raw", "missingness"])
     assert frame.equals(original)
+
+
+def test_select_feature_columns_allows_subset_of_available() -> None:
+    from smartphone_addiction.features.base import select_feature_columns_from_groups
+    from smartphone_addiction.features.domain import ALL_FEATURE_GROUPS, columns_for_groups
+
+    available = columns_for_groups(ALL_FEATURE_GROUPS)
+    selected = select_feature_columns_from_groups(available, ["raw"])
+    assert selected == columns_for_groups(["raw"])
+
+
+def test_select_feature_columns_requires_configured_groups() -> None:
+    from smartphone_addiction.errors import DataValidationError
+    from smartphone_addiction.features.base import select_feature_columns_from_groups
+    from smartphone_addiction.features.domain import columns_for_groups
+
+    available = columns_for_groups(["raw"])
+    with pytest.raises(DataValidationError, match="missing columns"):
+        select_feature_columns_from_groups(available, ["raw", "missingness"])
+
+
+def test_select_feature_columns_can_disable_require_all() -> None:
+    from smartphone_addiction.features.base import select_feature_columns_from_groups
+    from smartphone_addiction.features.domain import columns_for_groups
+
+    available = columns_for_groups(["raw"])
+    selected = select_feature_columns_from_groups(
+        available,
+        ["raw", "missingness"],
+        require_all=False,
+    )
+    assert selected == available

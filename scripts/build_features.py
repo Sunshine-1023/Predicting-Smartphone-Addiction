@@ -45,7 +45,9 @@ def main() -> int:
     args = parse_args()
     raw = load_competition_frames(args.raw_dir)
     frames = transform_competition_frames(raw.train, raw.test, groups=args.group)
-    paths = write_processed_dataset(frames, args.out_dir, version=args.version)
+    paths = write_processed_dataset(
+        frames, args.out_dir, version=args.version, raw_directory=args.raw_dir
+    )
     print(f"groups={','.join(frames.feature_groups)}")
     print(f"train_rows={len(frames.train)} test_rows={len(frames.test)}")
     print(f"feature_count={len(frames.feature_columns)}")

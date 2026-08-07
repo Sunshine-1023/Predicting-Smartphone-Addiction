@@ -84,3 +84,30 @@ def test_duplicate_seeds_rejected() -> None:
             ["cv.seeds=[42, 42]"],
             resolve=False,
         )
+
+
+def test_tune_experiment_budget_fields_load() -> None:
+    root = project_root()
+    config = load_config(
+        [
+            root / "configs/base.yaml",
+            root / "configs/experiments/catboost_tune_v1.yaml",
+        ],
+        resolve=False,
+    )
+    assert config.cv.n_splits == 3
+    assert config.cv.seeds == [42]
+    assert config.tuning.sample_fraction == 0.5
+    assert config.tuning.n_trials == 20
+    assert config.tuning.n_candidates == 3
+
+
+def test_tuning_override_changes_sample_fraction() -> None:
+    root = project_root()
+    config = load_config(
+        [root / "configs/base.yaml"],
+        ["tuning.sample_fraction=0.25", "tuning.n_trials=5"],
+        resolve=False,
+    )
+    assert config.tuning.sample_fraction == 0.25
+    assert config.tuning.n_trials == 5

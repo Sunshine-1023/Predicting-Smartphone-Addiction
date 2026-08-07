@@ -1,3 +1,0 @@
-# Reserved filename from the original project skeleton.
-# Logistic baseline is out of scope; do not load this file in training runs.
-# Use configs/models/catboost.yaml or configs/models/lightgbm.yaml instead.

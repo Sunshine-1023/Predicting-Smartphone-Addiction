@@ -125,6 +125,19 @@ def build_submission_from_run(
 ) -> dict[str, Path]:
     """Create a submission from a completed training run directory."""
     run_dir = Path(run_dir)
+    manifest_path = run_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise SubmissionValidationError(f"missing run manifest: {manifest_path}")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SubmissionValidationError(f"invalid run manifest: {manifest_path}") from exc
+    status = manifest.get("status")
+    if status != "completed":
+        raise SubmissionValidationError(
+            f"run status must be 'completed' (got {status!r}): {run_dir}"
+        )
+
     pred_path = run_dir / "test_predictions.parquet"
     metrics_path = run_dir / "metrics.json"
     if not pred_path.is_file():

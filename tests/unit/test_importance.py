@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -54,3 +56,24 @@ def test_permutation_importance_rejects_bad_repeats() -> None:
             np.array([0, 1]),
             n_repeats=0,
         )
+
+
+def test_validation_frame_for_fold_keeps_only_valid_rows(tmp_path: Path) -> None:
+    from smartphone_addiction.data.schema import ID_COLUMN, TARGET_COLUMN
+    from smartphone_addiction.evaluation.importance import validation_frame_for_fold
+
+    train = pd.DataFrame(
+        {
+            ID_COLUMN: [1, 2, 3, 4],
+            "a": [0.1, 0.2, 0.3, 0.4],
+            TARGET_COLUMN: [0, 1, 0, 1],
+        }
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    pd.DataFrame({ID_COLUMN: [1, 2, 3, 4], "fold": [0, 0, 1, 1]}).to_parquet(
+        run_dir / "folds_seed42.parquet",
+        index=False,
+    )
+    valid = validation_frame_for_fold(train, run_dir, "seed42-fold0")
+    assert list(valid[ID_COLUMN]) == [1, 2]

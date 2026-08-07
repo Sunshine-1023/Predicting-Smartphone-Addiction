@@ -13,11 +13,11 @@ from smartphone_addiction.data.validate import validate_competition_frames
 
 __all__ = [
     "CATEGORICAL_COLUMNS",
-    "CompetitionFrames",
     "FEATURE_COLUMNS",
     "ID_COLUMN",
     "NUMERIC_COLUMNS",
     "TARGET_COLUMN",
+    "CompetitionFrames",
     "download_competition",
     "fingerprint_files",
     "load_competition_frames",

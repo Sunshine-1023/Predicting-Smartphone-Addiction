@@ -117,10 +117,25 @@ def transform_competition_frames(
 def select_feature_columns_from_groups(
     available_columns: list[str],
     groups: list[str] | None,
+    *,
+    require_all: bool = True,
 ) -> list[str]:
-    """Filter an already-built feature list down to the requested groups."""
-    wanted = set(columns_for_groups(groups))
-    return [column for column in available_columns if column in wanted]
+    """Filter an already-built feature list down to the requested groups.
+
+    When ``require_all`` is True (default), raise if any column required by
+    ``groups`` is missing from ``available_columns``. This prevents silently
+    training on a raw-only parquet while the config claims domain features.
+    """
+    wanted = columns_for_groups(groups)
+    available = set(available_columns)
+    missing = [column for column in wanted if column not in available]
+    if missing and require_all:
+        raise DataValidationError(
+            "processed features missing columns required by config.features.groups: "
+            f"{missing}. Rebuild with matching --group flags, or narrow features.groups."
+        )
+    wanted_set = set(wanted)
+    return [column for column in available_columns if column in wanted_set]
 
 
 def _require_columns(frame: pd.DataFrame, expected: list[str], name: str) -> None:

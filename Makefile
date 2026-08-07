@@ -1,9 +1,10 @@
-.PHONY: setup setup-update test test-model lint format build features validate-data train tune submission package help
+.PHONY: setup setup-update test test-model lint format build features validate-data train train-raw tune submission package pre-commit help
 
 help:
 	@echo "Available targets:"
 	@echo "  setup         Create conda env from environment.yml"
 	@echo "  setup-update  Update env deps via pip editable install"
+	@echo "  pre-commit    Install git hooks from .pre-commit-config.yaml"
 	@echo "  test          Run unit/integration tests (exclude slow)"
 	@echo "  test-model    Run CatBoost/LightGBM adapter tests"
 	@echo "  lint          Ruff format check + lint"
@@ -11,7 +12,8 @@ help:
 	@echo "  build         Build wheel/sdist"
 	@echo "  features      Build processed parquet via CLI"
 	@echo "  validate-data Validate raw CSVs and write data_validation.md + EDA figures"
-	@echo "  train         Smoke train via CLI (catboost + smoke profile)"
+	@echo "  train         Smoke train with full domain feature groups (catboost)"
+	@echo "  train-raw     Smoke train with raw features only"
 	@echo "  tune          Bounded Optuna tune via CLI"
 	@echo "  submission    Build submission CSV from RUN_DIR (required)"
 	@echo "  package       Build offline Kaggle bundle (CONFIG required)"
@@ -20,7 +22,11 @@ setup:
 	conda env create -f environment.yml
 
 setup-update:
-	pip install -e ".[analysis,dev]"
+	pip install -e ".[analysis,dev,tools]"
+
+pre-commit:
+	pre-commit install
+	pre-commit run --all-files
 
 test:
 	python -m pytest -m "not slow" -q
@@ -37,7 +43,7 @@ format:
 	python -m ruff check --fix .
 
 build:
-	python -m build
+	python -m build --no-isolation
 
 features:
 	smartphone-addiction features build --raw-dir data/raw --out-dir data/processed
@@ -47,6 +53,12 @@ validate-data:
 	python scripts/write_data_validation_report.py
 
 train:
+	smartphone-addiction train \
+		--profile configs/profiles/smoke.yaml \
+		--model-config configs/models/catboost.yaml \
+		--experiment configs/experiments/catboost_domain_v1.yaml
+
+train-raw:
 	smartphone-addiction train \
 		--profile configs/profiles/smoke.yaml \
 		--model-config configs/models/catboost.yaml

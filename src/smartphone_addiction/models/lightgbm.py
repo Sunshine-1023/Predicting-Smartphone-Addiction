@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import joblib
@@ -10,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from smartphone_addiction.errors import TrainingError
-from smartphone_addiction.models.base import MISSING_TOKEN, prepare_categorical_frame
+from smartphone_addiction.models.base import prepare_categorical_frame
 
 
 class CategoryMapper:
@@ -111,25 +112,18 @@ class LightGBMAdapter:
                 lgb.early_stopping(self.early_stopping_rounds, verbose=False),
                 lgb.log_evaluation(period=0),
             ]
-            try:
-                model.fit(
-                    x_train,
-                    y_train,
-                    eval_X=x_eval,
-                    eval_y=y_eval,
-                    eval_metric="auc",
-                    categorical_feature=cat_cols,
-                    callbacks=callbacks,
-                )
-            except TypeError:
-                model.fit(
-                    x_train,
-                    y_train,
-                    eval_set=[(x_eval, y_eval)],
-                    eval_metric="auc",
-                    categorical_feature=cat_cols,
-                    callbacks=callbacks,
-                )
+            fit_kwargs: dict = {
+                "eval_metric": "auc",
+                "categorical_feature": cat_cols,
+                "callbacks": callbacks,
+            }
+            # Prefer eval_X/eval_y when available (LightGBM 4.5+); avoid try/except.
+            if "eval_X" in inspect.signature(model.fit).parameters:
+                fit_kwargs["eval_X"] = x_eval
+                fit_kwargs["eval_y"] = y_eval
+            else:
+                fit_kwargs["eval_set"] = [(x_eval, y_eval)]
+            model.fit(x_train, y_train, **fit_kwargs)
         else:
             model.fit(x_train, y_train, categorical_feature=cat_cols)
         self._model = model

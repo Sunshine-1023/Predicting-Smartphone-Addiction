@@ -1,4 +1,4 @@
-"""Bounded Optuna hyperparameter search for CatBoost and LightGBM."""
+"""Bounded Optuna hyperparameter search and candidate promotion helpers."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from smartphone_addiction.evaluation.metrics import summarize_oof
 from smartphone_addiction.models.catboost import build_catboost
 from smartphone_addiction.models.lightgbm import build_lightgbm
 from smartphone_addiction.training.cv import make_folds
+from smartphone_addiction.training.runner import run_training
 
 SUPPORTED_MODELS = frozenset({"catboost", "lightgbm"})
 
@@ -53,6 +54,16 @@ class TuningResult:
     candidate_yamls: list[Path]
     top_params: list[dict[str, Any]]
     study_name: str
+
+
+@dataclass(frozen=True)
+class CandidateEvaluationResult:
+    """Ranking produced by re-evaluating Optuna candidates on full OOF CV."""
+
+    selection_json: Path
+    ranking_csv: Path
+    selected_yaml: Path
+    rows: list[dict[str, Any]]
 
 
 def suggest_catboost_params(trial: optuna.Trial) -> dict[str, Any]:
@@ -269,27 +280,197 @@ def export_top_candidates(
     for rank, trial in enumerate(selected, start=1):
         params = dict(trial.params)
         # Restore early_stopping default used during suggest_* helpers.
-        if model_name == "catboost":
-            params.setdefault("early_stopping_rounds", 50)
-        else:
-            params.setdefault("early_stopping_rounds", 50)
+        params.setdefault("early_stopping_rounds", 50)
+        # Candidate YAML must be loadable by RunConfig (extra="forbid").
+        # Optuna trial metadata is written to a sidecar JSON, not the YAML.
         payload = {
             "model": {"name": model_name, "params": params},
-            "tuning": {
-                "trial_number": trial.number,
-                "optuna_value": float(trial.value),
-                "rank": rank,
-                "note": "Optuna-stage score only; re-evaluate on full 5-fold CV.",
-            },
         }
         path = output_dir / f"candidate_{rank}.yaml"
         path.write_text(
             yaml.safe_dump(payload, sort_keys=False, allow_unicode=True),
             encoding="utf-8",
         )
+        meta_path = output_dir / f"candidate_{rank}.meta.json"
+        meta_path.write_text(
+            json.dumps(
+                {
+                    "model_name": model_name,
+                    "rank": rank,
+                    "trial_number": trial.number,
+                    "optuna_value": float(trial.value),
+                    "note": "Optuna-stage score only; re-evaluate on full 5-fold CV.",
+                    "params": params,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         top_params.append(params)
         paths.append(path)
     return top_params, paths
+
+
+def evaluate_candidates(
+    *,
+    candidate_yamls: list[Path],
+    train: pd.DataFrame,
+    test: pd.DataFrame,
+    feature_columns: list[str],
+    categorical_columns: list[str],
+    feature_groups: list[str],
+    artifact_root: Path | str,
+    output_dir: Path | str,
+    n_splits: int = 5,
+    seeds: list[int] | None = None,
+    git_sha: str = "localdev",
+    git_dirty: bool = False,
+) -> CandidateEvaluationResult:
+    """Re-evaluate Optuna candidates with full stratified OOF and rank them."""
+    if not candidate_yamls:
+        raise ConfigurationError("evaluate_candidates requires at least one candidate YAML")
+    seeds = list(seeds or [42])
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    artifact_root = Path(artifact_root)
+    rows: list[dict[str, Any]] = []
+
+    for index, candidate_path in enumerate(candidate_yamls, start=1):
+        candidate_path = Path(candidate_path)
+        if not candidate_path.is_file():
+            raise ConfigurationError(f"candidate YAML not found: {candidate_path}")
+        payload = yaml.safe_load(candidate_path.read_text(encoding="utf-8")) or {}
+        if not isinstance(payload, dict) or "model" not in payload:
+            raise ConfigurationError(f"candidate YAML must contain model: {candidate_path}")
+        model_block = payload["model"]
+        model_name = str(model_block["name"]).lower().strip()
+        model_params = dict(model_block.get("params") or {})
+        result = run_training(
+            train=train,
+            test=test,
+            feature_columns=feature_columns,
+            categorical_columns=categorical_columns,
+            feature_groups=feature_groups,
+            model_name=model_name,
+            model_params=model_params,
+            n_splits=n_splits,
+            seeds=seeds,
+            artifact_root=artifact_root,
+            git_sha=git_sha,
+            git_dirty=git_dirty,
+            slug=f"{model_name}-candidate{index}",
+        )
+        meta_path = candidate_path.with_name(candidate_path.stem + ".meta.json")
+        optuna_value = None
+        if meta_path.is_file():
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            optuna_value = meta.get("optuna_value")
+        rows.append(
+            {
+                "rank_optuna": index,
+                "candidate_yaml": str(candidate_path),
+                "run_dir": str(result.run_dir),
+                "model_name": model_name,
+                "oof_auc": result.metrics.get("oof_auc"),
+                "seed_auc_mean": result.metrics.get("seed_auc_mean"),
+                "seed_auc_std": result.metrics.get("seed_auc_std"),
+                "optuna_value": optuna_value,
+                "n_features": result.metrics.get("n_features"),
+            }
+        )
+
+    rows.sort(key=lambda row: float(row["oof_auc"] or -1.0), reverse=True)
+    for rank, row in enumerate(rows, start=1):
+        row["rank_oof"] = rank
+
+    ranking_csv = output_dir / "candidate_ranking.csv"
+    pd.DataFrame(rows).to_csv(ranking_csv, index=False)
+
+    best = rows[0]
+    best_params = yaml.safe_load(Path(best["candidate_yaml"]).read_text(encoding="utf-8"))["model"][
+        "params"
+    ]
+    selected_payload = {
+        "features": {"groups": list(feature_groups)},
+        "model": {"name": best["model_name"], "params": best_params},
+    }
+    selected_yaml = output_dir / "selected_final.yaml"
+    selected_yaml.write_text(
+        yaml.safe_dump(selected_payload, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    selection_json = output_dir / "selection.json"
+    selection_json.write_text(
+        json.dumps(
+            {
+                "n_candidates": len(rows),
+                "n_splits": n_splits,
+                "seeds": seeds,
+                "best": best,
+                "ranking": rows,
+                "selected_yaml": str(selected_yaml),
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return CandidateEvaluationResult(
+        selection_json=selection_json,
+        ranking_csv=ranking_csv,
+        selected_yaml=selected_yaml,
+        rows=rows,
+    )
+
+
+def promote_candidate(
+    *,
+    selection_json: Path | str,
+    output_yaml: Path | str,
+    template_yaml: Path | str | None = None,
+) -> Path:
+    """Write a versioned experiment YAML from an evaluate-candidates selection."""
+    selection_path = Path(selection_json)
+    if not selection_path.is_file():
+        raise ConfigurationError(f"selection.json not found: {selection_path}")
+    selection = json.loads(selection_path.read_text(encoding="utf-8"))
+    best = selection.get("best") or {}
+    candidate_yaml = Path(best["candidate_yaml"])
+    candidate = yaml.safe_load(candidate_yaml.read_text(encoding="utf-8")) or {}
+    selected_yaml = Path(selection.get("selected_yaml") or "")
+    selected = {}
+    if selected_yaml.is_file():
+        selected = yaml.safe_load(selected_yaml.read_text(encoding="utf-8")) or {}
+
+    payload: dict[str, Any] = {}
+    if template_yaml is not None:
+        template_path = Path(template_yaml)
+        if not template_path.is_file():
+            raise ConfigurationError(f"template YAML not found: {template_path}")
+        payload = yaml.safe_load(template_path.read_text(encoding="utf-8")) or {}
+
+    if "features" in selected:
+        payload["features"] = selected["features"]
+    payload["model"] = candidate["model"]
+    meta = {
+        "source_selection": str(selection_path),
+        "source_candidate": str(candidate_yaml),
+        "oof_auc": best.get("oof_auc"),
+        "run_dir": best.get("run_dir"),
+    }
+
+    output_yaml = Path(output_yaml)
+    output_yaml.parent.mkdir(parents=True, exist_ok=True)
+    output_yaml.write_text(
+        yaml.safe_dump(payload, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    output_yaml.with_suffix(".meta.json").write_text(
+        json.dumps(meta, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return output_yaml
 
 
 def _write_trials_csv(study: optuna.Study, path: Path) -> None:

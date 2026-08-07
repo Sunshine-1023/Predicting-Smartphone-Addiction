@@ -72,6 +72,10 @@ def test_build_submission_from_run(tmp_path: Path, competition_frames) -> None:
     _, test, sample = competition_frames
     run_dir = tmp_path / "run"
     run_dir.mkdir()
+    (run_dir / "manifest.json").write_text(
+        json.dumps({"status": "completed", "run_id": "demo"}),
+        encoding="utf-8",
+    )
     pd.DataFrame(
         {
             ID_COLUMN: test[ID_COLUMN].to_numpy(),
@@ -90,3 +94,45 @@ def test_build_submission_from_run(tmp_path: Path, competition_frames) -> None:
     meta = json.loads(paths["meta"].read_text(encoding="utf-8"))
     assert meta["oof_auc"] == 0.77
     assert meta["model_name"] == "catboost"
+
+
+def test_build_submission_from_run_rejects_incomplete(tmp_path: Path, competition_frames) -> None:
+    _, test, sample = competition_frames
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "manifest.json").write_text(
+        json.dumps({"status": "running"}),
+        encoding="utf-8",
+    )
+    pd.DataFrame(
+        {
+            ID_COLUMN: test[ID_COLUMN].to_numpy(),
+            "prediction": np.full(len(test), 0.33),
+        }
+    ).to_parquet(run_dir / "test_predictions.parquet")
+    with pytest.raises(SubmissionValidationError, match="completed"):
+        build_submission_from_run(
+            run_dir=run_dir,
+            sample=sample,
+            output_csv=tmp_path / "out" / "sub.csv",
+        )
+
+
+def test_build_submission_from_run_rejects_missing_manifest(
+    tmp_path: Path, competition_frames
+) -> None:
+    _, test, sample = competition_frames
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    pd.DataFrame(
+        {
+            ID_COLUMN: test[ID_COLUMN].to_numpy(),
+            "prediction": np.full(len(test), 0.33),
+        }
+    ).to_parquet(run_dir / "test_predictions.parquet")
+    with pytest.raises(SubmissionValidationError, match="manifest"):
+        build_submission_from_run(
+            run_dir=run_dir,
+            sample=sample,
+            output_csv=tmp_path / "out" / "sub.csv",
+        )

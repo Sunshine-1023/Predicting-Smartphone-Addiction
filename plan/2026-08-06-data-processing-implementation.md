@@ -43,28 +43,28 @@
 
 ### 特征清单（实现时必须全部覆盖）
 
-**原始（12）**  
+**原始（12）**
 `age`, `daily_screen_time_hours`, `social_media_hours`, `gaming_hours`, `work_study_hours`, `sleep_hours`, `notifications_per_day`, `app_opens_per_day`, `weekend_screen_time`, `gender`, `stress_level`, `academic_work_impact`
 
-**类别（3）**  
+**类别（3）**
 `gender`, `stress_level`, `academic_work_impact`（空 → `__MISSING__`）
 
-**缺失信息**  
+**缺失信息**
 `missing_count`, `missing_ratio`, `missing_pattern`，以及每个原始字段的 `{col}_is_missing`
 
-**行为组合**  
-`entertainment_hours = social_media_hours + gaming_hours`  
-`work_minus_entertainment = work_study_hours - entertainment_hours`（允许负值）  
-`known_usage_hours = social_media_hours + gaming_hours + work_study_hours`  
+**行为组合**
+`entertainment_hours = social_media_hours + gaming_hours`
+`work_minus_entertainment = work_study_hours - entertainment_hours`（允许负值）
+`known_usage_hours = social_media_hours + gaming_hours + work_study_hours`
 `unaccounted_screen_time = daily_screen_time_hours - known_usage_hours`（允许负值）
 
-**比例 / 差值**  
+**比例 / 差值**
 `screen_to_sleep_ratio`, `entertainment_to_screen_ratio`, `work_to_screen_ratio`, `weekend_minus_daily`, `weekend_to_daily_ratio`, `notifications_per_screen_hour`, `opens_per_screen_hour`, `opens_per_notification`, `notifications_minus_opens`
 
-**对数**  
+**对数**
 `log_notifications = log(1 + notifications_per_day)`, `log_app_opens = log(1 + app_opens_per_day)`（原字段保留）
 
-**类别组合**  
+**类别组合**
 `gender_x_stress`, `gender_x_impact`, `stress_x_impact`
 
 ---
@@ -118,7 +118,7 @@ def test_target_must_be_binary(competition_frames) -> None:
 
 - [ ] **Step 2: 运行确认失败**
 
-Run: `python -m pytest tests/unit/test_data_validation.py -q`  
+Run: `python -m pytest tests/unit/test_data_validation.py -q`
 Expected: FAIL（模块不存在）
 
 - [ ] **Step 3: 实现 schema + validate + 合成 fixture**
@@ -136,7 +136,7 @@ Expected: FAIL（模块不存在）
 
 - [ ] **Step 4: 测试通过**
 
-Run: `python -m pytest tests/unit/test_data_validation.py -q`  
+Run: `python -m pytest tests/unit/test_data_validation.py -q`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -165,6 +165,7 @@ class CompetitionFrames:
     train: pd.DataFrame
     test: pd.DataFrame
     sample_submission: pd.DataFrame
+
 
 def load_competition_frames(directory: Path) -> CompetitionFrames:
     """Read train.csv, test.csv, sample_submission.csv; validate; never mutate files."""
@@ -222,6 +223,7 @@ git commit -m "feat: load and validate official competition CSVs"
 def safe_divide(numerator: pd.Series, denominator: pd.Series, eps: float = 1e-12) -> pd.Series:
     """Return NaN when either side missing or |denominator| < eps; never ±inf."""
 
+
 def add_missingness_features(frame: pd.DataFrame, feature_columns: list[str]) -> pd.DataFrame:
     """Add missing_count, missing_ratio, missing_pattern, and {col}_is_missing. Copy-in/copy-out."""
 ```
@@ -241,11 +243,13 @@ def test_safe_divide() -> None:
 
 
 def test_missingness_features() -> None:
-    frame = pd.DataFrame({
-        "daily_screen_time_hours": [8.0, np.nan],
-        "sleep_hours": [np.nan, 7.0],
-        "gender": ["Female", None],
-    })
+    frame = pd.DataFrame(
+        {
+            "daily_screen_time_hours": [8.0, np.nan],
+            "sleep_hours": [np.nan, 7.0],
+            "gender": ["Female", None],
+        }
+    )
     cols = list(frame.columns)
     out = add_missingness_features(frame, cols)
     assert out.loc[0, "missing_count"] == 1
@@ -277,7 +281,10 @@ git commit -m "feat: add safe_divide and missingness features"
 ```python
 MISSING_TOKEN = "__MISSING__"
 
-def fill_categorical_missing(frame: pd.DataFrame, categorical_columns: list[str]) -> pd.DataFrame: ...
+
+def fill_categorical_missing(
+    frame: pd.DataFrame, categorical_columns: list[str]
+) -> pd.DataFrame: ...
 def add_behavioral_totals(frame: pd.DataFrame) -> pd.DataFrame: ...
 def add_ratio_and_delta_features(frame: pd.DataFrame) -> pd.DataFrame: ...
 def add_log_count_features(frame: pd.DataFrame) -> pd.DataFrame: ...
@@ -314,11 +321,12 @@ git commit -m "feat: add behavioral, ratio, log, and category interaction featur
 ```python
 @dataclass(frozen=True)
 class TransformedFrames:
-    train: pd.DataFrame   # 含 id + 全部特征 + addicted_label
-    test: pd.DataFrame    # 含 id + 全部特征（无 label）
+    train: pd.DataFrame  # 含 id + 全部特征 + addicted_label
+    test: pd.DataFrame  # 含 id + 全部特征（无 label）
     feature_columns: list[str]  # 模型输入列（不含 id/label），顺序固定
     categorical_columns: list[str]
     numeric_columns: list[str]
+
 
 def transform_competition_frames(
     train: pd.DataFrame,
@@ -329,13 +337,13 @@ def transform_competition_frames(
 
 流水线顺序（写死，与定稿一致）：
 
-1. 复制输入，校验特征列存在  
-2. 在「仅特征列」上算 missingness（类别填补前，使 `*_is_missing` 反映真实缺失）  
-3. `fill_categorical_missing`  
-4. behavioral totals → ratios/deltas → log → category interactions  
-5. 组装列顺序；断言 train/test 特征列名、顺序、dtype 一致  
-6. 断言无 `±inf`；三类原始类别无真正空值  
-7. 断言 `id` 顺序与输入相同；行数不变  
+1. 复制输入，校验特征列存在
+2. 在「仅特征列」上算 missingness（类别填补前，使 `*_is_missing` 反映真实缺失）
+3. `fill_categorical_missing`
+4. behavioral totals → ratios/deltas → log → category interactions
+5. 组装列顺序；断言 train/test 特征列名、顺序、dtype 一致
+6. 断言无 `±inf`；三类原始类别无真正空值
+7. 断言 `id` 顺序与输入相同；行数不变
 
 - [ ] **Step 1: 测试「标签不进入特征」与「train/test 列一致」**
 
@@ -344,9 +352,7 @@ def test_label_not_used_in_features(competition_frames) -> None:
     train, test, _ = competition_frames
     result = transform_competition_frames(train, test)
     assert "addicted_label" not in result.feature_columns
-    assert result.feature_columns == [
-        c for c in result.test.columns if c != "id"
-    ]
+    assert result.feature_columns == [c for c in result.test.columns if c != "id"]
     assert list(result.train.columns) == ["id", *result.feature_columns, "addicted_label"] or (
         # 允许 id 与 label 位置固定为两端，中间为 feature_columns
         set(result.train.columns) == set(["id", "addicted_label", *result.feature_columns])
@@ -489,9 +495,9 @@ git commit -m "feat: add processed feature build entrypoint"
 
 处理后的数据直接进 CatBoost / LightGBM：
 
-1. 从 parquet 读入；`categorical_columns` 交给模型原生类别处理  
-2. 5 折分层 CV，指标 ROC-AUC（OOF）  
-3. 特征是否有效以 OOF 为准，再考虑融合与提交  
+1. 从 parquet 读入；`categorical_columns` 交给模型原生类别处理
+2. 5 折分层 CV，指标 ROC-AUC（OOF）
+3. 特征是否有效以 OOF 为准，再考虑融合与提交
 
 ---
 

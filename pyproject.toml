@@ -32,12 +32,16 @@ analysis = [
 ]
 dev = [
   "build>=1.2,<2",
+  "hatchling>=1.25,<2",
   "detect-secrets>=1.5,<2",
   "nbstripout>=0.7,<1",
   "pre-commit>=3.7,<5",
   "pytest>=8,<9",
   "pytest-cov>=5,<7",
   "ruff>=0.6,<1",
+]
+tools = [
+  "kaggle>=1.6,<2",
 ]
 
 [project.scripts]
@@ -58,6 +62,13 @@ markers = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = [
+  "notebooks",
+  "kaggle",
+  ".venv",
+  "dist",
+  "artifacts",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
@@ -67,3 +78,4 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 "src/smartphone_addiction/cli.py" = ["B008"]
 "scripts/build_features.py" = ["E402"]
 "scripts/verify_environment.py" = ["SIM103"]
+"scripts/write_data_validation_report.py" = ["E402"]
