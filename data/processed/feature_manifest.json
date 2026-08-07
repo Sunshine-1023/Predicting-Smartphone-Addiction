@@ -130,11 +130,11 @@
     "package_version": "0.1.0",
     "files": {
       "data/schema.py": "c557906fe5efc876cd86f911dc221707a9c8e6e127937328ff36fa69e745a3e0",
-      "features/base.py": "4c882f0ec39a908c1b6f67d1858a1ff4597dc1902f742fe9fab78845b254e14f",
+      "features/base.py": "c4d2256903fb673a1a0d65e9c7324b68dfc07f552456f24a5e7e5ddec95b9eab",
       "features/domain.py": "c7c7fbdced7e062c122d155902461c7bf4e75cd70191b18cece64caa418b9cbe",
       "features/io.py": "e87980dcf014917049fe3edd2982f5c714d4ae311b45febe5a2fb092ec45faa2"
     },
-    "digest": "be174c250984fdae3e51d85a8e4b0af287733f9143a11fbed5d808fb34274652"
+    "digest": "4204fbd11dc1537ec5dd23c5ffdee4e962020d37fe600542c04fe3c6f8581a91"
   },
   "rules": {
     "numeric_missing": "keep_nan",

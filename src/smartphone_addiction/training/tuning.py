@@ -14,6 +14,7 @@ import pandas as pd
 import yaml
 from optuna.samplers import TPESampler
 from sklearn.model_selection import StratifiedShuffleSplit
+from tqdm.auto import tqdm
 
 from smartphone_addiction.data.schema import TARGET_COLUMN
 from smartphone_addiction.errors import ConfigurationError, TrainingError
@@ -221,7 +222,7 @@ def run_tuning(
     )
     remaining = max(0, budget.n_trials - len(study.trials))
     if remaining > 0:
-        study.optimize(objective, n_trials=remaining, show_progress_bar=False)
+        study.optimize(objective, n_trials=remaining, show_progress_bar=True)
 
     trials_csv = output_dir / "trials.csv"
     _write_trials_csv(study, trials_csv)
@@ -336,8 +337,15 @@ def evaluate_candidates(
     artifact_root = Path(artifact_root)
     rows: list[dict[str, Any]] = []
 
-    for index, candidate_path in enumerate(candidate_yamls, start=1):
+    candidate_iter = tqdm(
+        list(enumerate(candidate_yamls, start=1)),
+        desc="evaluate-candidates",
+        unit="candidate",
+        leave=True,
+    )
+    for index, candidate_path in candidate_iter:
         candidate_path = Path(candidate_path)
+        candidate_iter.set_postfix_str(candidate_path.name)
         if not candidate_path.is_file():
             raise ConfigurationError(f"candidate YAML not found: {candidate_path}")
         payload = yaml.safe_load(candidate_path.read_text(encoding="utf-8")) or {}
@@ -379,6 +387,7 @@ def evaluate_candidates(
                 "n_features": result.metrics.get("n_features"),
             }
         )
+        candidate_iter.set_postfix_str(f"{candidate_path.name} auc={result.metrics.get('oof_auc')}")
 
     rows.sort(key=lambda row: float(row["oof_auc"] or -1.0), reverse=True)
     for rank, row in enumerate(rows, start=1):

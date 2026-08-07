@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import redirect_stdout
 from pathlib import Path
 
 import numpy as np
@@ -10,6 +11,11 @@ from catboost import CatBoostClassifier, Pool
 
 from smartphone_addiction.errors import TrainingError
 from smartphone_addiction.models.base import prepare_categorical_frame
+from smartphone_addiction.models.progress import (
+    CatBoostProgressStdout,
+    close_bar,
+    make_iteration_bar,
+)
 
 
 class CatBoostAdapter:
@@ -46,6 +52,9 @@ class CatBoostAdapter:
         y: pd.Series | np.ndarray,
         x_valid: pd.DataFrame | None = None,
         y_valid: pd.Series | np.ndarray | None = None,
+        *,
+        show_progress: bool = False,
+        progress_desc: str = "catboost",
     ) -> CatBoostAdapter:
         self._feature_columns = list(x.columns)
         cat_cols = [c for c in self.categorical_columns if c in x.columns]
@@ -57,6 +66,10 @@ class CatBoostAdapter:
         if x_valid is not None and y_valid is not None:
             x_eval = prepare_categorical_frame(x_valid[self._feature_columns], cat_cols)
             eval_set = Pool(x_eval, np.asarray(y_valid), cat_features=cat_cols)
+
+        params = dict(self.extra_params)
+        params.pop("show_progress", None)
+        params.pop("progress_desc", None)
 
         model = CatBoostClassifier(
             loss_function="Logloss",
@@ -70,15 +83,26 @@ class CatBoostAdapter:
             task_type="CPU",
             allow_writing_files=False,
             verbose=False,
-            **self.extra_params,
+            **params,
         )
-        fit_kwargs: dict[str, object] = {}
+        fit_kwargs: dict[str, object] = {
+            "verbose": 1 if show_progress else False,
+        }
         if eval_set is not None:
             fit_kwargs["eval_set"] = eval_set
             fit_kwargs["early_stopping_rounds"] = self.early_stopping_rounds
             fit_kwargs["use_best_model"] = True
 
-        model.fit(train_pool, **fit_kwargs)
+        bar = make_iteration_bar(self.iterations, progress_desc) if show_progress else None
+        try:
+            if bar is None:
+                model.fit(train_pool, **fit_kwargs)
+            else:
+                with redirect_stdout(CatBoostProgressStdout(bar)):
+                    model.fit(train_pool, **fit_kwargs)
+        finally:
+            close_bar(bar)
+
         self._model = model
         # CatBoost best_iteration_ is 0-based; tree_count_ is the used tree count.
         best = getattr(model, "best_iteration_", None)

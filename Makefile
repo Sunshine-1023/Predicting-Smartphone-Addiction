@@ -1,4 +1,4 @@
-.PHONY: setup setup-update test test-model lint format build features validate-data train train-raw tune submission package pre-commit help
+.PHONY: setup setup-update test test-model lint format build features validate-data train train-raw train-lgbm train-lgbm-raw train-dev train-lgbm-dev train-final train-lgbm-final tune submission package pre-commit help
 
 help:
 	@echo "Available targets:"
@@ -12,8 +12,14 @@ help:
 	@echo "  build         Build wheel/sdist"
 	@echo "  features      Build processed parquet via CLI"
 	@echo "  validate-data Validate raw CSVs and write data_validation.md + EDA figures"
-	@echo "  train         Smoke train with full domain feature groups (catboost)"
-	@echo "  train-raw     Smoke train with raw features only"
+	@echo "  train         Smoke train CatBoost with full domain feature groups"
+	@echo "  train-raw     Smoke train CatBoost with raw features only"
+	@echo "  train-lgbm    Smoke train LightGBM with full domain feature groups"
+	@echo "  train-lgbm-raw Smoke train LightGBM with raw features only"
+	@echo "  train-dev     Full-data CatBoost 5-fold (single seed)"
+	@echo "  train-lgbm-dev Full-data LightGBM 5-fold (single seed)"
+	@echo "  train-final   Full-data CatBoost 5-fold x 3 seeds"
+	@echo "  train-lgbm-final Full-data LightGBM 5-fold x 3 seeds"
 	@echo "  tune          Bounded Optuna tune via CLI"
 	@echo "  submission    Build submission CSV from RUN_DIR (required)"
 	@echo "  package       Build offline Kaggle bundle (CONFIG required)"
@@ -62,6 +68,41 @@ train-raw:
 	smartphone-addiction train \
 		--profile configs/profiles/smoke.yaml \
 		--model-config configs/models/catboost.yaml
+
+train-lgbm:
+	smartphone-addiction train \
+		--profile configs/profiles/smoke.yaml \
+		--model-config configs/models/lightgbm.yaml \
+		--experiment configs/experiments/lightgbm_domain_v1.yaml
+
+train-lgbm-raw:
+	smartphone-addiction train \
+		--profile configs/profiles/smoke.yaml \
+		--model-config configs/models/lightgbm.yaml
+
+train-dev:
+	smartphone-addiction train \
+		--profile configs/profiles/dev.yaml \
+		--model-config configs/models/catboost.yaml \
+		--experiment configs/experiments/catboost_domain_v1.yaml
+
+train-lgbm-dev:
+	smartphone-addiction train \
+		--profile configs/profiles/dev.yaml \
+		--model-config configs/models/lightgbm.yaml \
+		--experiment configs/experiments/lightgbm_domain_v1.yaml
+
+train-final:
+	smartphone-addiction train \
+		--profile configs/profiles/final.yaml \
+		--model-config configs/models/catboost.yaml \
+		--experiment configs/experiments/catboost_domain_v1.yaml
+
+train-lgbm-final:
+	smartphone-addiction train \
+		--profile configs/profiles/final.yaml \
+		--model-config configs/models/lightgbm.yaml \
+		--experiment configs/experiments/lightgbm_domain_v1.yaml
 
 tune:
 	smartphone-addiction tune \

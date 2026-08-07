@@ -79,6 +79,12 @@ make validate-data
 make features
 make train
 make train-raw
+make train-lgbm
+make train-lgbm-raw
+make train-dev
+make train-lgbm-dev
+make train-final
+make train-lgbm-final
 make tune
 make package CONFIG=configs/experiments/catboost_domain_v1.yaml
 make submission RUN_DIR=artifacts/runs/<run>
@@ -92,6 +98,7 @@ CLI 示例：
 
 ```bash
 smartphone-addiction train -p configs/profiles/smoke.yaml -m configs/models/catboost.yaml -e configs/experiments/catboost_domain_v1.yaml
+smartphone-addiction train -p configs/profiles/smoke.yaml -m configs/models/lightgbm.yaml -e configs/experiments/lightgbm_domain_v1.yaml
 smartphone-addiction features build -g raw -g missingness
 smartphone-addiction blend --runs <run_a> --runs <run_b>
 smartphone-addiction submission build --run artifacts/blends/<blend_dir>

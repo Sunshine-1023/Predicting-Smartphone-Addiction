@@ -12,6 +12,11 @@ import pandas as pd
 
 from smartphone_addiction.errors import TrainingError
 from smartphone_addiction.models.base import prepare_categorical_frame
+from smartphone_addiction.models.progress import (
+    close_bar,
+    make_iteration_bar,
+    make_lightgbm_tqdm_callback,
+)
 
 
 class CategoryMapper:
@@ -85,12 +90,19 @@ class LightGBMAdapter:
         y: pd.Series | np.ndarray,
         x_valid: pd.DataFrame | None = None,
         y_valid: pd.Series | np.ndarray | None = None,
+        *,
+        show_progress: bool = False,
+        progress_desc: str = "lightgbm",
     ) -> LightGBMAdapter:
         self._feature_columns = list(x.columns)
         cat_cols = [c for c in self.categorical_columns if c in x.columns]
         self._mapper = CategoryMapper(cat_cols).fit(x)
         x_train = self._mapper.transform(x)
         y_train = np.asarray(y)
+
+        params = dict(self.extra_params)
+        params.pop("show_progress", None)
+        params.pop("progress_desc", None)
 
         model = lgb.LGBMClassifier(
             objective="binary",
@@ -102,30 +114,40 @@ class LightGBMAdapter:
             n_jobs=self.n_jobs,
             random_state=self.random_state,
             verbosity=-1,
-            **self.extra_params,
+            **params,
         )
 
-        if x_valid is not None and y_valid is not None:
-            x_eval = self._mapper.transform(x_valid[self._feature_columns])
-            y_eval = np.asarray(y_valid)
-            callbacks = [
-                lgb.early_stopping(self.early_stopping_rounds, verbose=False),
-                lgb.log_evaluation(period=0),
-            ]
-            fit_kwargs: dict = {
-                "eval_metric": "auc",
-                "categorical_feature": cat_cols,
-                "callbacks": callbacks,
-            }
-            # Prefer eval_X/eval_y when available (LightGBM 4.5+); avoid try/except.
-            if "eval_X" in inspect.signature(model.fit).parameters:
-                fit_kwargs["eval_X"] = x_eval
-                fit_kwargs["eval_y"] = y_eval
+        bar = make_iteration_bar(self.n_estimators, progress_desc) if show_progress else None
+        try:
+            if x_valid is not None and y_valid is not None:
+                x_eval = self._mapper.transform(x_valid[self._feature_columns])
+                y_eval = np.asarray(y_valid)
+                callbacks = [
+                    lgb.early_stopping(self.early_stopping_rounds, verbose=False),
+                    lgb.log_evaluation(period=0),
+                ]
+                if bar is not None:
+                    callbacks.append(make_lightgbm_tqdm_callback(bar))
+                fit_kwargs: dict = {
+                    "eval_metric": "auc",
+                    "categorical_feature": cat_cols,
+                    "callbacks": callbacks,
+                }
+                # Prefer eval_X/eval_y when available (LightGBM 4.5+); avoid try/except.
+                if "eval_X" in inspect.signature(model.fit).parameters:
+                    fit_kwargs["eval_X"] = x_eval
+                    fit_kwargs["eval_y"] = y_eval
+                else:
+                    fit_kwargs["eval_set"] = [(x_eval, y_eval)]
+                model.fit(x_train, y_train, **fit_kwargs)
             else:
-                fit_kwargs["eval_set"] = [(x_eval, y_eval)]
-            model.fit(x_train, y_train, **fit_kwargs)
-        else:
-            model.fit(x_train, y_train, categorical_feature=cat_cols)
+                fit_kwargs = {"categorical_feature": cat_cols}
+                if bar is not None:
+                    fit_kwargs["callbacks"] = [make_lightgbm_tqdm_callback(bar)]
+                model.fit(x_train, y_train, **fit_kwargs)
+        finally:
+            close_bar(bar)
+
         self._model = model
         best = getattr(model, "best_iteration_", None)
         if best is None or best == 0:

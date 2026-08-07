@@ -12,6 +12,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from tqdm.auto import tqdm
 
 from smartphone_addiction.artifacts.store import ArtifactStore
 from smartphone_addiction.data.load import CompetitionFrames
@@ -179,59 +180,77 @@ def run_training(
     )
 
     try:
+        fold_ids_by_seed: dict[int, np.ndarray] = {}
         for seed in seeds:
             fold_ids = make_folds(y, n_splits=n_splits, seed=seed)
+            fold_ids_by_seed[seed] = fold_ids
             store.write_frame(
                 f"folds_seed{seed}.parquet",
                 pd.DataFrame({ID_COLUMN: ids, "fold": fold_ids}),
             )
-            for fold_id in range(n_splits):
-                key = _fold_key(seed, fold_id)
-                if key not in pending_keys:
-                    continue
 
-                train_mask = fold_ids != fold_id
-                valid_mask = fold_ids == fold_id
-                valid_index = np.flatnonzero(valid_mask)
+        fold_jobs = [
+            (seed, fold_id)
+            for seed in seeds
+            for fold_id in range(n_splits)
+            if _fold_key(seed, fold_id) in pending_keys
+        ]
+        progress = tqdm(
+            fold_jobs,
+            desc=f"{model_name} OOF",
+            unit="fold",
+            leave=True,
+        )
+        for seed, fold_id in progress:
+            key = _fold_key(seed, fold_id)
+            fold_ids = fold_ids_by_seed[seed]
+            progress.set_postfix_str(key)
 
-                model = _build_model(
-                    model_name,
-                    cat_cols,
-                    model_params,
-                    seed=seed,
-                )
-                model.fit(
-                    x_all.loc[train_mask],
-                    y[train_mask],
-                    x_all.loc[valid_mask],
-                    y[valid_mask],
-                )
-                valid_pred = model.predict_proba(x_all.loc[valid_mask])
-                test_pred = model.predict_proba(x_test)
+            train_mask = fold_ids != fold_id
+            valid_mask = fold_ids == fold_id
+            valid_index = np.flatnonzero(valid_mask)
 
-                np.savez_compressed(
-                    pred_dir / f"{key}.npz",
-                    valid_index=valid_index.astype(np.int64),
-                    valid_pred=valid_pred.astype(np.float64),
-                    test_pred=test_pred.astype(np.float64),
-                )
+            model = _build_model(
+                model_name,
+                cat_cols,
+                model_params,
+                seed=seed,
+            )
+            model.fit(
+                x_all.loc[train_mask],
+                y[train_mask],
+                x_all.loc[valid_mask],
+                y[valid_mask],
+                show_progress=True,
+                progress_desc=key,
+            )
+            valid_pred = model.predict_proba(x_all.loc[valid_mask])
+            test_pred = model.predict_proba(x_test)
 
-                fold_auc = float(summarize_oof(y[valid_mask], valid_pred).auc)
-                fold_row = {
-                    "seed": int(seed),
-                    "fold": int(fold_id),
-                    "fold_key": key,
-                    "auc": fold_auc,
-                    "n_train": int(train_mask.sum()),
-                    "n_valid": int(valid_mask.sum()),
-                    "best_iteration": model.best_iteration,
-                    "model_seed": int(seed),
-                }
-                suffix = ".cbm" if model_name == "catboost" else ".joblib"
-                model.save(store.run_dir / "models" / f"{key}{suffix}")
-                store.mark_fold_complete(key, fold_row)
-                logger.info("completed %s auc=%.6f model_seed=%s", key, fold_auc, seed)
-                del model
+            np.savez_compressed(
+                pred_dir / f"{key}.npz",
+                valid_index=valid_index.astype(np.int64),
+                valid_pred=valid_pred.astype(np.float64),
+                test_pred=test_pred.astype(np.float64),
+            )
+
+            fold_auc = float(summarize_oof(y[valid_mask], valid_pred).auc)
+            fold_row = {
+                "seed": int(seed),
+                "fold": int(fold_id),
+                "fold_key": key,
+                "auc": fold_auc,
+                "n_train": int(train_mask.sum()),
+                "n_valid": int(valid_mask.sum()),
+                "best_iteration": model.best_iteration,
+                "model_seed": int(seed),
+            }
+            suffix = ".cbm" if model_name == "catboost" else ".joblib"
+            model.save(store.run_dir / "models" / f"{key}{suffix}")
+            store.mark_fold_complete(key, fold_row)
+            progress.set_postfix_str(f"{key} auc={fold_auc:.4f}")
+            logger.info("completed %s auc=%.6f model_seed=%s", key, fold_auc, seed)
+            del model
 
         metrics = _aggregate_and_write(
             store=store,
