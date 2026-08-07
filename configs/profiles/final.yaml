@@ -1,0 +1,8 @@
+# Final profile: full data, 5-fold × three seeds.
+data:
+  sample_rows: null
+cv:
+  n_splits: 5
+  seeds: [42, 2026, 3407]
+runtime:
+  threads: 4

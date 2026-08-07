@@ -1,0 +1,13 @@
+# Bounded Optuna search for CatBoost (re-evaluate top candidates on full CV).
+features:
+  groups: [raw, missingness, behavioral_totals, behavioral_ratios, behavioral_deltas]
+model:
+  name: catboost
+  params: {}
+cv:
+  n_splits: 3
+  seeds: [42]
+data:
+  sample_rows: null
+runtime:
+  threads: 4

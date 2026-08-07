@@ -1,0 +1,5 @@
+# CatBoost with full processed feature set (domain + missingness + ratios).
+features:
+  groups: [raw, missingness, behavioral_totals, behavioral_ratios, behavioral_deltas]
+model:
+  name: catboost

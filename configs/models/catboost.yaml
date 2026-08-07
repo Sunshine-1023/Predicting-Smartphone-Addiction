@@ -1,0 +1,10 @@
+model:
+  name: catboost
+  params:
+    iterations: 2000
+    depth: 6
+    learning_rate: 0.05
+    l2_leaf_reg: 3.0
+    early_stopping_rounds: 100
+    thread_count: 4
+    # random_seed is injected per CV seed by the training runner

@@ -1,0 +1,10 @@
+model:
+  name: lightgbm
+  params:
+    n_estimators: 2000
+    num_leaves: 63
+    learning_rate: 0.05
+    min_child_samples: 20
+    early_stopping_rounds: 100
+    n_jobs: 4
+    # random_state is injected per CV seed by the training runner

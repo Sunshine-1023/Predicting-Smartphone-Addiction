@@ -1,0 +1,8 @@
+# Smoke profile: small stratified sample, few folds, single seed.
+data:
+  sample_rows: 5000
+cv:
+  n_splits: 2
+  seeds: [42]
+runtime:
+  threads: 2
