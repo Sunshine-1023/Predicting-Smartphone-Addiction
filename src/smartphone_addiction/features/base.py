@@ -15,7 +15,6 @@ from smartphone_addiction.data.schema import (
 )
 from smartphone_addiction.errors import DataValidationError
 from smartphone_addiction.features.domain import (
-    ALL_FEATURE_GROUPS,
     INTERACTION_COLUMNS,
     build_features,
     columns_for_groups,
@@ -26,8 +25,6 @@ DERIVED_CATEGORICAL_COLUMNS: list[str] = [
     "missing_pattern",
     *INTERACTION_COLUMNS,
 ]
-
-FEATURE_COLUMN_ORDER: list[str] = columns_for_groups(ALL_FEATURE_GROUPS)
 
 
 @dataclass(frozen=True)

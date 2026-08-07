@@ -30,7 +30,6 @@ from smartphone_addiction.training.cv import make_folds
 logger = logging.getLogger(__name__)
 
 SUPPORTED_MODELS = frozenset({"catboost", "lightgbm"})
-REQUIRED_DATA_HASH_KEYS = ("train", "test", "feature_manifest")
 
 
 @dataclass(frozen=True)

@@ -167,16 +167,6 @@ SUPPORTED_FEATURE_GROUPS: frozenset[str] = frozenset(
     }
 )
 
-PLAN_FEATURE_GROUPS: frozenset[str] = frozenset(
-    {
-        "raw",
-        "missingness",
-        "behavioral_totals",
-        "behavioral_ratios",
-        "behavioral_deltas",
-    }
-)
-
 RAW_COLUMNS: list[str] = [
     "age",
     "daily_screen_time_hours",
@@ -291,9 +281,6 @@ def build_features(frame: pd.DataFrame, groups: list[str]) -> pd.DataFrame:
 
     selected = normalize_feature_groups(groups)
     selected_set = set(selected)
-    if frame.index.has_duplicates:
-        # Preserve index identity; duplicates are allowed but uncommon.
-        pass
 
     working = frame.copy()
     missing_raw = [column for column in RAW_COLUMNS if column not in working.columns]

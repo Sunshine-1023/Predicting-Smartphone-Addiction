@@ -26,14 +26,6 @@ from smartphone_addiction.training.runner import run_training
 
 SUPPORTED_MODELS = frozenset({"catboost", "lightgbm"})
 
-DEFAULT_BUDGET = {
-    "sample_fraction": 0.5,
-    "n_splits": 3,
-    "seed": 42,
-    "n_trials": 20,
-    "n_candidates": 3,
-}
-
 
 @dataclass(frozen=True)
 class TuningBudget:
