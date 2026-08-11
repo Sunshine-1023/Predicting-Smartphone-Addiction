@@ -75,6 +75,7 @@ def test_bundle_is_deterministic_and_clean(tmp_path: Path) -> None:
     assert "smartphone-addiction train" in launcher
     assert "SMARTPHONE_ADDICTION_ROOT" in launcher
     assert "DATA_DIR" in launcher
+    assert "--train-only" in launcher
     assert "--base" in launcher
     for forbidden in (".git", "kaggle.json", "artifacts/", "submissions/", "train.csv"):
         assert not any(forbidden in name for name in names)

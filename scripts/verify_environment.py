@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import importlib
 import sys
 from dataclasses import dataclass
@@ -69,10 +70,17 @@ def _in_range(
     return True
 
 
-def verify_environment(stream=sys.stdout) -> int:
+def verify_environment(
+    stream=sys.stdout,
+    *,
+    train_only: bool = False,
+) -> int:
     """Print a compact table and return process exit code."""
     rows: list[tuple[str, str, str]] = []
     ok = True
+    requirements = REQUIREMENTS
+    if train_only:
+        requirements = [req for req in REQUIREMENTS if req.module != "optuna"]
 
     py = f"{sys.version_info.major}.{sys.version_info.minor}"
     py_status = "ok" if sys.version_info[:2] == (3, 11) else "FAIL"
@@ -80,7 +88,7 @@ def verify_environment(stream=sys.stdout) -> int:
         ok = False
     rows.append(("python", py, py_status))
 
-    for req in REQUIREMENTS:
+    for req in requirements:
         try:
             version = _version_of(req.module)
             status = "ok" if _in_range(version, req.minimum, req.maximum) else "FAIL"
@@ -96,11 +104,20 @@ def verify_environment(stream=sys.stdout) -> int:
     print(f"{'-' * width}  {'-' * 16}  ------", file=stream)
     for name, version, status in rows:
         print(f"{name:<{width}}  {version:<16}  {status}", file=stream)
+    if train_only:
+        print("mode=train-only (optuna not required)", file=stream)
     return 0 if ok else 1
 
 
 def main() -> None:
-    raise SystemExit(verify_environment())
+    parser = argparse.ArgumentParser(description="Verify runtime dependencies.")
+    parser.add_argument(
+        "--train-only",
+        action="store_true",
+        help="Skip Optuna check for offline train bundles installed with --no-deps",
+    )
+    args = parser.parse_args()
+    raise SystemExit(verify_environment(train_only=args.train_only))
 
 
 if __name__ == "__main__":

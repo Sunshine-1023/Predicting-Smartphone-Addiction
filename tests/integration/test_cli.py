@@ -54,9 +54,12 @@ def test_cli_data_validate_missing_files(tmp_path: Path) -> None:
     assert "missing competition files" in result.output
 
 
-def test_cli_submission_build(tmp_path: Path, competition_frames) -> None:
+def test_cli_submission_build(tmp_path: Path, competition_frames, monkeypatch) -> None:
     _, test, sample = competition_frames
-    run_dir = tmp_path / "run"
+    (tmp_path / ".smartphone_addiction_root").write_text("", encoding="utf-8")
+    monkeypatch.setenv("SMARTPHONE_ADDICTION_ROOT", str(tmp_path))
+
+    run_dir = tmp_path / "cli-demo-run"
     run_dir.mkdir()
     (run_dir / "manifest.json").write_text(
         json.dumps({"status": "completed", "run_id": "cli-demo"}),
@@ -74,7 +77,6 @@ def test_cli_submission_build(tmp_path: Path, competition_frames) -> None:
     )
     sample_path = tmp_path / "sample_submission.csv"
     sample.to_csv(sample_path, index=False)
-    out = tmp_path / "submissions" / "submission.csv"
     result = runner.invoke(
         app,
         [
@@ -84,37 +86,69 @@ def test_cli_submission_build(tmp_path: Path, competition_frames) -> None:
             str(run_dir),
             "--sample",
             str(sample_path),
-            "--output",
-            str(out),
         ],
     )
     assert result.exit_code == 0, result.output
+    out = tmp_path / "submissions" / f"{run_dir.name}.csv"
     assert out.is_file()
-    assert out.with_name("submission.meta.json").is_file()
+    assert out.with_name(f"{run_dir.name}.meta.json").is_file()
     frame = pd.read_csv(out)
     assert list(frame.columns) == [ID_COLUMN, TARGET_COLUMN]
     assert "never auto-uploads" in result.stdout
 
+    again = runner.invoke(
+        app,
+        [
+            "submission",
+            "build",
+            "--run",
+            str(run_dir),
+            "--sample",
+            str(sample_path),
+        ],
+    )
+    assert again.exit_code != 0
+    assert "already exists" in again.output
+
+    forced = runner.invoke(
+        app,
+        [
+            "submission",
+            "build",
+            "--run",
+            str(run_dir),
+            "--sample",
+            str(sample_path),
+            "--force",
+        ],
+    )
+    assert forced.exit_code == 0, forced.output
+
 
 @pytest.mark.model
-def test_cli_train_smoke_raw(tmp_path: Path, competition_frames) -> None:
+def test_cli_train_smoke_raw(tmp_path: Path, competition_frames, monkeypatch) -> None:
     train, test, sample = competition_frames
+    (tmp_path / ".smartphone_addiction_root").write_text("", encoding="utf-8")
+    monkeypatch.setenv("SMARTPHONE_ADDICTION_ROOT", str(tmp_path))
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
     train.to_csv(raw_dir / "train.csv", index=False)
     test.to_csv(raw_dir / "test.csv", index=False)
     sample.to_csv(raw_dir / "sample_submission.csv", index=False)
     artifact_dir = tmp_path / "artifacts"
+    real_root = Path(__file__).resolve().parents[2]
 
     result = runner.invoke(
         app,
         [
             "train",
             "--raw",
+            "--base",
+            str(real_root / "configs/base.yaml"),
             "--profile",
-            "configs/profiles/smoke.yaml",
+            str(real_root / "configs/profiles/smoke.yaml"),
             "--model-config",
-            "configs/models/catboost.yaml",
+            str(real_root / "configs/models/catboost.yaml"),
             "--override",
             f"data.directory={raw_dir}",
             "--override",
@@ -136,3 +170,10 @@ def test_cli_train_smoke_raw(tmp_path: Path, competition_frames) -> None:
     assert result.exit_code == 0, result.output
     assert "run_dir=" in result.stdout
     assert "oof_auc=" in result.stdout
+    summary = tmp_path / "reports" / "experiment_summary.csv"
+    assert summary.is_file()
+    run_id = pd.read_csv(summary).iloc[0]["run_id"]
+    assert str(run_id).startswith("20")
+    real_summary = real_root / "reports" / "experiment_summary.csv"
+    if real_summary.is_file():
+        assert str(run_id) not in real_summary.read_text(encoding="utf-8")

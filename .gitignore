@@ -4,6 +4,7 @@
 .pytest_cache/
 .ruff_cache/
 .coverage
+.coverage.*
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -11,7 +12,7 @@ __pycache__/
 data/raw/*
 !data/raw/.gitkeep
 data/processed/*.parquet
-artifacts/
+/artifacts/
 submissions/
 dist/
 work/

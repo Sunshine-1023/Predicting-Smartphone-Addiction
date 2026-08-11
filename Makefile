@@ -1,4 +1,8 @@
-.PHONY: setup setup-update test test-model lint format build features validate-data train train-raw train-lgbm train-lgbm-raw train-dev train-lgbm-dev train-final train-lgbm-final tune submission package pre-commit help
+.PHONY: setup setup-update test test-model lint format build features validate-data train train-raw train-lgbm train-lgbm-raw train-dev train-lgbm-dev train-final train-lgbm-final tune submission submit package pre-commit help
+
+COMPETITION ?= playground-series-s6e8
+# Leave unset to derive submissions/<run_dir_name>.csv via the CLI.
+SUBMISSION_CSV ?=
 
 help:
 	@echo "Available targets:"
@@ -21,7 +25,8 @@ help:
 	@echo "  train-final   Full-data CatBoost 5-fold x 3 seeds"
 	@echo "  train-lgbm-final Full-data LightGBM 5-fold x 3 seeds"
 	@echo "  tune          Bounded Optuna tune via CLI"
-	@echo "  submission    Build submission CSV from RUN_DIR (required)"
+	@echo "  submission    Build submission CSV from RUN_DIR (default: submissions/<run>.csv; FORCE=1 to overwrite)"
+	@echo "  submit        Build submission CSV then upload via Kaggle CLI (RUN_DIR required; FORCE=1 to overwrite)"
 	@echo "  package       Build offline Kaggle bundle (CONFIG required)"
 
 setup:
@@ -35,7 +40,13 @@ pre-commit:
 	pre-commit run --all-files
 
 test:
-	python -m pytest -m "not slow" -q
+	@before=$$(mktemp); \
+	bash scripts/check_reports_unchanged.sh snapshot "$$before"; \
+	python -m pytest -m "not slow" -q; \
+	status=$$?; \
+	if [ $$status -ne 0 ]; then rm -f "$$before"; exit $$status; fi; \
+	bash scripts/check_reports_unchanged.sh check "$$before"; \
+	rm -f "$$before"
 
 test-model:
 	python -m pytest -m model -q
@@ -107,12 +118,25 @@ train-lgbm-final:
 tune:
 	smartphone-addiction tune \
 		--profile configs/profiles/smoke.yaml \
-		--experiment configs/experiments/catboost_tune_v1.yaml \
+		--model-config configs/models/catboost.yaml \
+		--experiment configs/experiments/archive/catboost_tune_v1.yaml \
 		--n-trials 20
 
 submission:
-	@test -n "$(RUN_DIR)" || (echo "Usage: make submission RUN_DIR=artifacts/runs/<run>" && exit 1)
-	smartphone-addiction submission build --run "$(RUN_DIR)"
+	@test -n "$(RUN_DIR)" || (echo "Usage: make submission RUN_DIR=artifacts/runs/<run> [SUBMISSION_CSV=...] [FORCE=1]" && exit 1)
+	smartphone-addiction submission build --run "$(RUN_DIR)" \
+		$(if $(SUBMISSION_CSV),--output "$(SUBMISSION_CSV)",) \
+		$(if $(FORCE),--force,)
+
+submit:
+	@test -n "$(RUN_DIR)" || (echo "Usage: make submit RUN_DIR=artifacts/runs/<run> [MSG=...] [COMPETITION=...] [SUBMISSION_CSV=...] [FORCE=1]" && exit 1)
+	@set -e; \
+	csv="$(if $(SUBMISSION_CSV),$(SUBMISSION_CSV),submissions/$(notdir $(RUN_DIR)).csv)"; \
+	smartphone-addiction submission build --run "$(RUN_DIR)" --output "$$csv" $(if $(FORCE),--force,) && \
+	kaggle competitions submit \
+		-c "$(COMPETITION)" \
+		-f "$$csv" \
+		-m "$(or $(MSG),submission from $(RUN_DIR))"
 
 package:
 	@test -n "$(CONFIG)" || (echo "Usage: make package CONFIG=configs/experiments/catboost_domain_v1.yaml" && exit 1)

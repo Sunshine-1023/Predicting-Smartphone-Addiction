@@ -16,6 +16,7 @@ from smartphone_addiction.data.schema import ID_COLUMN, TARGET_COLUMN
 from smartphone_addiction.errors import TrainingError
 from smartphone_addiction.models.catboost import CatBoostAdapter
 from smartphone_addiction.models.lightgbm import LightGBMAdapter
+from smartphone_addiction.training.runner import compute_training_data_hashes
 
 _FOLD_KEY_RE = re.compile(r"^seed(?P<seed>\d+)-fold(?P<fold>\d+)$")
 
@@ -174,10 +175,36 @@ def validation_frame_for_fold(
     return subset
 
 
+def assert_run_matches_processed_data(
+    run_dir: Path | str,
+    *,
+    train: pd.DataFrame,
+    test: pd.DataFrame,
+    feature_columns: list[str],
+    categorical_columns: list[str],
+) -> None:
+    """Refuse importance when current processed frames differ from the training run."""
+    run_dir = Path(run_dir)
+    manifest_path = run_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise TrainingError(f"missing run manifest: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    expected = manifest.get("data_hashes")
+    if not isinstance(expected, dict) or not expected:
+        raise TrainingError(f"run missing data_hashes provenance: {run_dir}")
+    computed = compute_training_data_hashes(train, test, feature_columns, categorical_columns)
+    if computed != expected:
+        raise TrainingError(
+            "processed data does not match run provenance; "
+            "rebuild features or select a run trained on the current parquet"
+        )
+
+
 def compute_run_importance(
     *,
     run_dir: Path | str,
     train: pd.DataFrame,
+    test: pd.DataFrame | None = None,
     fold_key: str | None = None,
     n_repeats: int = 5,
     sample_rows: int | None = 5_000,
@@ -191,6 +218,23 @@ def compute_run_importance(
     run_dir = Path(run_dir)
     if TARGET_COLUMN not in train.columns:
         raise TrainingError("train frame must include the target column")
+    if test is None:
+        raise TrainingError("test frame is required for processed-data provenance checks")
+    feature_path = run_dir / "feature_names.json"
+    if not feature_path.is_file():
+        raise TrainingError(f"missing feature_names.json in {run_dir}")
+    feature_names = json.loads(feature_path.read_text(encoding="utf-8"))
+    feature_columns = list(feature_names.get("feature_columns") or [])
+    categorical_columns = list(feature_names.get("categorical_columns") or [])
+    if not feature_columns:
+        raise TrainingError(f"feature_names.json missing feature_columns in {run_dir}")
+    assert_run_matches_processed_data(
+        run_dir,
+        train=train,
+        test=test,
+        feature_columns=feature_columns,
+        categorical_columns=categorical_columns,
+    )
 
     fold_keys = [fold_key] if fold_key is not None else list_fold_keys(run_dir)
     if not fold_keys:
@@ -268,6 +312,7 @@ def compute_run_importance(
 
 # Re-export for tests and CLI helpers.
 __all__ = [
+    "assert_run_matches_processed_data",
     "compute_run_importance",
     "list_fold_keys",
     "load_fold_model",

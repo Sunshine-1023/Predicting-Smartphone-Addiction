@@ -91,7 +91,7 @@ def test_tune_experiment_budget_fields_load() -> None:
     config = load_config(
         [
             root / "configs/base.yaml",
-            root / "configs/experiments/catboost_tune_v1.yaml",
+            root / "configs/experiments/archive/catboost_tune_v1.yaml",
         ],
         resolve=False,
     )

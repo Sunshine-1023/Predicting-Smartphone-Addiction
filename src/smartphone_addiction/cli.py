@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from smartphone_addiction.data.download import download_competition, fingerprint
 from smartphone_addiction.data.load import CompetitionFrames, load_competition_frames
 from smartphone_addiction.data.schema import TARGET_COLUMN
 from smartphone_addiction.errors import (
+    AlignmentError,
     ArtifactError,
     ConfigurationError,
     DataValidationError,
@@ -25,6 +27,10 @@ from smartphone_addiction.evaluation.blend import blend_run_predictions
 from smartphone_addiction.evaluation.importance import compute_run_importance
 from smartphone_addiction.evaluation.report import (
     append_runs_to_summary,
+    mark_submission_built,
+    record_leaderboard_score,
+    sync_artifact_runs_to_summary,
+    upsert_run_to_summary,
     write_final_report_scaffold,
 )
 from smartphone_addiction.features.base import (
@@ -32,11 +38,15 @@ from smartphone_addiction.features.base import (
     transform_competition_frames,
 )
 from smartphone_addiction.features.domain import ALL_FEATURE_GROUPS
-from smartphone_addiction.features.io import feature_code_fingerprint, write_processed_dataset
+from smartphone_addiction.features.io import (
+    feature_code_fingerprint,
+    validate_processed_manifest,
+    write_processed_dataset,
+)
 from smartphone_addiction.git_info import git_is_dirty, git_sha
 from smartphone_addiction.kaggle_bundle import package_kaggle_bundle
 from smartphone_addiction.paths import project_root, resolve_path
-from smartphone_addiction.submission import build_submission_from_run
+from smartphone_addiction.submission import build_submission_from_run, default_submission_csv
 from smartphone_addiction.training.runner import run_training
 from smartphone_addiction.training.tuning import (
     TuningBudget,
@@ -63,6 +73,7 @@ app.add_typer(report_app, name="report")
 app.add_typer(package_app, name="package")
 
 DOMAIN_ERRORS = (
+    AlignmentError,
     ConfigurationError,
     DataValidationError,
     TrainingError,
@@ -238,6 +249,11 @@ def train(
         help="Use data/processed parquet (default) or transform from raw CSV.",
     ),
     resume_run_dir: Path | None = typer.Option(None, "--resume"),
+    allow_dirty: bool = typer.Option(
+        False,
+        "--allow-dirty",
+        help="Allow final-profile training when the git tree is dirty",
+    ),
 ) -> None:
     """Run OOF training for CatBoost or LightGBM using merged YAML config."""
     try:
@@ -255,6 +271,13 @@ def train(
         else:
             model_params.setdefault("n_jobs", config.runtime.threads)
 
+        profile_name = Path(profile).stem if profile else ""
+        if profile_name == "final" and _git_dirty() and not allow_dirty:
+            _fail(
+                "refusing final-profile training on a dirty git tree; "
+                "commit changes or pass --allow-dirty"
+            )
+
         if processed:
             processed_dir = Path(config.data.processed_directory)
             train_path = processed_dir / "train_features.parquet"
@@ -269,17 +292,22 @@ def train(
             test_df = pd.read_parquet(test_path)
             feature_columns = None
             categorical_columns = None
-            if manifest_path.is_file():
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                feature_columns = list(manifest["feature_columns"])
-                categorical_columns = list(manifest["categorical_columns"])
-                saved_code = (manifest.get("feature_code") or {}).get("digest")
-                current_code = feature_code_fingerprint()["digest"]
-                if saved_code and saved_code != current_code:
-                    _fail(
-                        "processed feature_code digest mismatch; "
-                        "rebuild with: smartphone-addiction features build"
-                    )
+            if not manifest_path.is_file():
+                _fail(
+                    f"processed feature_manifest.json missing under {processed_dir}; "
+                    "run: smartphone-addiction features build"
+                )
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            validate_processed_manifest(
+                manifest,
+                raw_directory=Path(config.data.directory),
+                train=train_df,
+                test=test_df,
+                train_path=train_path,
+                test_path=test_path,
+            )
+            feature_columns = list(manifest["feature_columns"])
+            categorical_columns = list(manifest["categorical_columns"])
             train_df = _maybe_sample(train_df, config.data.sample_rows)
             result = run_training(
                 train=train_df,
@@ -329,6 +357,19 @@ def train(
     typer.echo(f"status={result.store.manifest().status}")
     typer.echo(f"oof_auc={result.metrics.get('oof_auc')}")
     typer.echo(f"oof_coverage={result.metrics.get('oof_coverage')}")
+    try:
+        digest = feature_code_fingerprint()["digest"] if processed else ""
+        summary = upsert_run_to_summary(
+            result.run_dir,
+            resolve_path(Path("reports/experiment_summary.csv"), project_root()),
+            root=project_root(),
+            feature_groups=",".join(config.features.groups),
+            profile=Path(profile).stem if profile else "",
+            feature_code_digest=digest,
+        )
+        typer.echo(f"summary={summary}")
+    except DOMAIN_ERRORS as exc:
+        typer.echo(f"summary_warning={exc}")
 
 
 @submission_app.command("build")
@@ -339,25 +380,47 @@ def submission_build(
         "--sample",
         help="Official sample_submission.csv",
     ),
-    output: Path = typer.Option(
-        Path("submissions/submission.csv"),
+    output: Path | None = typer.Option(
+        None,
         "--output",
         "-o",
+        help="Output CSV path (default: submissions/<run_dir_name>.csv)",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Overwrite an existing submission CSV/meta pair",
     ),
 ) -> None:
     """Build a validated submission CSV from a completed run (does not upload)."""
     root = project_root()
     try:
+        resolved_run = resolve_path(run_dir, root)
+        output_csv = (
+            resolve_path(output, root)
+            if output is not None
+            else resolve_path(default_submission_csv(resolved_run), root)
+        )
         sample_df = pd.read_csv(resolve_path(sample, root))
         paths = build_submission_from_run(
-            run_dir=resolve_path(run_dir, root),
+            run_dir=resolved_run,
             sample=sample_df,
-            output_csv=resolve_path(output, root),
+            output_csv=output_csv,
+            force=force,
+        )
+        ledgers = mark_submission_built(
+            run_dir=resolved_run,
+            submission_csv=paths["csv"],
+            summary_path=resolve_path(Path("reports/experiment_summary.csv"), root),
+            submissions_path=resolve_path(Path("reports/submissions.csv"), root),
+            root=root,
         )
     except DOMAIN_ERRORS as exc:
         _fail(str(exc))
     typer.echo(f"csv={paths['csv']}")
     typer.echo(f"meta={paths['meta']}")
+    typer.echo(f"summary={ledgers['summary']}")
+    typer.echo(f"submissions={ledgers['submissions']}")
     typer.echo("Submission ready. Upload manually on Kaggle; this CLI never auto-uploads.")
 
 
@@ -374,6 +437,11 @@ def tune(
         "--n-trials",
         help="Override tuning.n_trials from merged YAML (default: use config).",
     ),
+    fresh_study: bool = typer.Option(
+        False,
+        "--fresh-study",
+        help="Start a new Optuna study instead of resuming an existing sqlite db",
+    ),
 ) -> None:
     """Run bounded Optuna search using merged YAML (cv + tuning budget)."""
     root = project_root()
@@ -387,19 +455,21 @@ def tune(
         )
         processed_dir = Path(config.data.processed_directory)
         train_path = processed_dir / "train_features.parquet"
+        test_path = processed_dir / "test_features.parquet"
         manifest_path = processed_dir / "feature_manifest.json"
-        if not train_path.is_file() or not manifest_path.is_file():
-            _fail("processed train features missing; run features build first")
+        if not train_path.is_file() or not test_path.is_file() or not manifest_path.is_file():
+            _fail("processed features missing; run features build first")
         train_df = pd.read_parquet(train_path)
-        train_df = _maybe_sample(train_df, config.data.sample_rows)
+        test_df = pd.read_parquet(test_path)
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        saved_code = (manifest.get("feature_code") or {}).get("digest")
-        current_code = feature_code_fingerprint()["digest"]
-        if saved_code and saved_code != current_code:
-            _fail(
-                "processed feature_code digest mismatch; "
-                "rebuild with: smartphone-addiction features build"
-            )
+        validate_processed_manifest(
+            manifest,
+            raw_directory=Path(config.data.directory),
+            train=train_df,
+            test=test_df,
+            train_path=train_path,
+            test_path=test_path,
+        )
         feature_columns = select_feature_columns_from_groups(
             list(manifest["feature_columns"]),
             list(config.features.groups),
@@ -416,13 +486,27 @@ def tune(
             n_trials=n_trials if n_trials is not None else config.tuning.n_trials,
             n_candidates=config.tuning.n_candidates,
         )
+        base_params = dict(config.model.params)
         objective = make_tuning_objective(
             model_name=config.model.name,
             train=train_df,
             feature_columns=feature_columns,
             categorical_columns=categorical_columns,
             budget=budget,
+            base_params=base_params,
         )
+        study_suffix = hashlib.sha256(
+            json.dumps(
+                {
+                    "feature_columns": feature_columns,
+                    "sample_fraction": budget.sample_fraction,
+                    "n_splits": budget.n_splits,
+                    "seed": budget.seed,
+                    "model_params": base_params,
+                },
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()[:12]
         out = resolve_path(output_dir, root) / config.model.name
         result = run_tuning(
             model_name=config.model.name,
@@ -430,6 +514,9 @@ def tune(
             output_dir=out,
             budget=budget,
             study_name=f"{config.model.name}-tune",
+            study_suffix=study_suffix,
+            fresh_study=fresh_study,
+            base_params=base_params,
         )
     except DOMAIN_ERRORS as exc:
         _fail(str(exc))
@@ -475,6 +562,14 @@ def evaluate_candidates_cmd(
         train_df = _maybe_sample(pd.read_parquet(train_path), config.data.sample_rows)
         test_df = pd.read_parquet(test_path)
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        validate_processed_manifest(
+            manifest,
+            raw_directory=Path(config.data.directory),
+            train=pd.read_parquet(train_path),
+            test=test_df,
+            train_path=train_path,
+            test_path=test_path,
+        )
         feature_columns = select_feature_columns_from_groups(
             list(manifest["feature_columns"]),
             list(config.features.groups),
@@ -561,12 +656,15 @@ def importance_cmd(
     root = project_root()
     try:
         train_path = resolve_path(processed_dir, root) / "train_features.parquet"
-        if not train_path.is_file():
-            _fail(f"missing processed train features: {train_path}")
+        test_path = resolve_path(processed_dir, root) / "test_features.parquet"
+        if not train_path.is_file() or not test_path.is_file():
+            _fail(f"missing processed features: {train_path} / {test_path}")
         train_df = pd.read_parquet(train_path)
+        test_df = pd.read_parquet(test_path)
         summary = compute_run_importance(
             run_dir=resolve_path(run_dir, root),
             train=train_df,
+            test=test_df,
             fold_key=fold_key,
             n_repeats=n_repeats,
             sample_rows=sample_rows,
@@ -592,6 +690,11 @@ def blend(
     ),
     output_dir: Path = typer.Option(Path("artifacts/blends"), "--output-dir"),
     step: float = typer.Option(0.05, "--step"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Replace an existing blend output directory",
+    ),
 ) -> None:
     """Search probability/rank blend weights on two OOF runs."""
     if len(runs) != 2:
@@ -606,6 +709,7 @@ def blend(
             second_run_dir=second,
             output_dir=out,
             step=step,
+            force=force,
         )
     except DOMAIN_ERRORS as exc:
         _fail(str(exc))
@@ -615,6 +719,20 @@ def blend(
     typer.echo(f"method={payload['method']}")
     typer.echo(f"first_weight={payload['first_weight']}")
     typer.echo(f"oof_auc={payload['auc']}")
+    try:
+        summary = upsert_run_to_summary(
+            out,
+            resolve_path(Path("reports/experiment_summary.csv"), root),
+            root=root,
+            profile="blend",
+            notes=(
+                f"method={payload['method']} "
+                f"weights={payload['first_weight']},{payload['second_weight']}"
+            ),
+        )
+        typer.echo(f"summary={summary}")
+    except DOMAIN_ERRORS as exc:
+        typer.echo(f"summary_warning={exc}")
 
 
 @report_app.command("experiments")
@@ -631,6 +749,7 @@ def report_experiments(
         path = append_runs_to_summary(
             [resolve_path(item, root) for item in run],
             resolve_path(summary, root),
+            root=root,
             feature_groups=feature_groups,
             profile=profile,
             notes=notes,
@@ -639,6 +758,49 @@ def report_experiments(
     except DOMAIN_ERRORS as exc:
         _fail(str(exc))
     typer.echo(f"summary={path}")
+
+
+@report_app.command("sync")
+def report_sync(
+    summary: Path = typer.Option(Path("reports/experiment_summary.csv"), "--summary"),
+) -> None:
+    """Scan artifacts/runs and artifacts/blends and upsert completed runs into the summary."""
+    root = project_root()
+    try:
+        path = sync_artifact_runs_to_summary(
+            root=root,
+            summary_path=resolve_path(summary, root),
+        )
+        write_final_report_scaffold(resolve_path(Path("reports/final_report.md"), root))
+    except DOMAIN_ERRORS as exc:
+        _fail(str(exc))
+    typer.echo(f"summary={path}")
+
+
+@report_app.command("lb")
+def report_lb(
+    run_id: str = typer.Option(..., "--run-id", help="Run or blend directory name"),
+    public_lb: float | None = typer.Option(None, "--public-lb"),
+    private_lb: float | None = typer.Option(None, "--private-lb"),
+    notes: str = typer.Option("", "--notes"),
+    summary: Path = typer.Option(Path("reports/experiment_summary.csv"), "--summary"),
+    submissions: Path = typer.Option(Path("reports/submissions.csv"), "--submissions"),
+) -> None:
+    """Record Public/Private leaderboard scores for an existing run_id."""
+    root = project_root()
+    try:
+        paths = record_leaderboard_score(
+            run_id=run_id,
+            public_lb=public_lb,
+            private_lb=private_lb,
+            summary_path=resolve_path(summary, root),
+            submissions_path=resolve_path(submissions, root),
+            notes=notes,
+        )
+    except DOMAIN_ERRORS as exc:
+        _fail(str(exc))
+    typer.echo(f"summary={paths['summary']}")
+    typer.echo(f"submissions={paths['submissions']}")
 
 
 @package_app.command("kaggle")

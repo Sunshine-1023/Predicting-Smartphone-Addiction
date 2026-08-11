@@ -12,6 +12,7 @@ import yaml
 from smartphone_addiction.training.tuning import (
     TuningBudget,
     export_top_candidates,
+    merge_tuning_params,
     promote_candidate,
     run_tuning,
     suggest_catboost_params,
@@ -96,6 +97,60 @@ def test_export_top_candidates_ranks_by_score(tmp_path: Path) -> None:
     assert len(top_params) == 3
     assert all(path.is_file() for path in paths)
     assert all(path.with_name(path.stem + ".meta.json").is_file() for path in paths)
+
+
+def test_merge_tuning_params_keeps_fixed_yaml_values() -> None:
+    merged = merge_tuning_params(
+        {"thread_count": 4, "depth": 6, "learning_rate": 0.05},
+        {"depth": 8, "learning_rate": 0.02},
+    )
+    assert merged["thread_count"] == 4
+    assert merged["depth"] == 8
+    assert merged["learning_rate"] == 0.02
+
+
+def test_fresh_study_replaces_existing_sqlite_study(tmp_path: Path) -> None:
+    def objective(trial: optuna.Trial) -> float:
+        return trial.suggest_float("x", 0.0, 1.0)
+
+    first = run_tuning(
+        model_name="catboost",
+        objective=objective,
+        output_dir=tmp_path,
+        budget=TuningBudget(n_trials=3, n_candidates=1, seed=1),
+        study_name="fresh-demo",
+    )
+    assert first.study_db.is_file()
+    assert len(pd.read_csv(first.trials_csv)) == 3
+
+    second = run_tuning(
+        model_name="catboost",
+        objective=objective,
+        output_dir=tmp_path,
+        budget=TuningBudget(n_trials=2, n_candidates=1, seed=2),
+        study_name="fresh-demo",
+        fresh_study=True,
+    )
+    assert len(pd.read_csv(second.trials_csv)) == 2
+
+
+def test_export_includes_base_params(tmp_path: Path) -> None:
+    study = optuna.create_study(direction="maximize")
+
+    def objective(trial: optuna.Trial) -> float:
+        return trial.suggest_float("learning_rate", 0.01, 0.2)
+
+    study.optimize(objective, n_trials=2)
+    _, paths = export_top_candidates(
+        study=study,
+        model_name="lightgbm",
+        output_dir=tmp_path,
+        n_candidates=1,
+        base_params={"n_jobs": 2, "verbose": -1},
+    )
+    payload = yaml.safe_load(paths[0].read_text(encoding="utf-8"))
+    assert payload["model"]["params"]["n_jobs"] == 2
+    assert "learning_rate" in payload["model"]["params"]
 
 
 def test_promote_candidate_writes_train_ready_yaml(tmp_path: Path) -> None:

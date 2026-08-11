@@ -14,10 +14,16 @@ import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
 
+from smartphone_addiction.alignment import align_predictions_to_ids, assert_unique_ids
 from smartphone_addiction.artifacts.store import ArtifactStore
 from smartphone_addiction.data.load import CompetitionFrames
 from smartphone_addiction.data.schema import ID_COLUMN, TARGET_COLUMN
-from smartphone_addiction.errors import ArtifactError, DataValidationError, TrainingError
+from smartphone_addiction.errors import (
+    AlignmentError,
+    ArtifactError,
+    DataValidationError,
+    TrainingError,
+)
 from smartphone_addiction.evaluation.metrics import summarize_oof
 from smartphone_addiction.features.base import (
     select_feature_columns_from_groups,
@@ -130,8 +136,11 @@ def run_training(
     y = train_df[TARGET_COLUMN].to_numpy()
     x_all = train_df[feature_cols]
     x_test = test_df[feature_cols]
-    ids = train_df[ID_COLUMN].to_numpy()
-    test_ids = test_df[ID_COLUMN].to_numpy()
+    try:
+        ids = assert_unique_ids(train_df[ID_COLUMN], label="train id").to_numpy()
+        test_ids = assert_unique_ids(test_df[ID_COLUMN], label="test id").to_numpy()
+    except AlignmentError as exc:
+        raise TrainingError(str(exc)) from exc
 
     if resume_run_dir is not None:
         store = ArtifactStore.open(resume_run_dir)
@@ -144,6 +153,7 @@ def run_training(
         _validate_resume_consistency(
             store=store,
             ids=ids,
+            test_ids=test_ids,
             y=y,
             feature_cols=feature_cols,
             seeds=seeds,
@@ -225,11 +235,14 @@ def run_training(
             )
             valid_pred = model.predict_proba(x_all.loc[valid_mask])
             test_pred = model.predict_proba(x_test)
+            valid_ids = ids[valid_index]
 
             np.savez_compressed(
                 pred_dir / f"{key}.npz",
                 valid_index=valid_index.astype(np.int64),
+                valid_ids=valid_ids,
                 valid_pred=valid_pred.astype(np.float64),
+                test_ids=test_ids,
                 test_pred=test_pred.astype(np.float64),
             )
 
@@ -263,6 +276,11 @@ def run_training(
             y=y,
             feature_cols=feature_cols,
         )
+        if git_dirty:
+            metrics["git_dirty"] = True
+            metrics["provenance_warning"] = (
+                "run produced from a dirty git tree; git_sha alone cannot reproduce this run"
+            )
         store.complete(metrics=metrics)
         return TrainingResult(run_dir=store.run_dir, metrics=metrics, store=store)
 
@@ -278,6 +296,7 @@ def _validate_resume_consistency(
     *,
     store: ArtifactStore,
     ids: np.ndarray,
+    test_ids: np.ndarray,
     y: np.ndarray,
     feature_cols: list[str],
     seeds: list[int],
@@ -309,16 +328,59 @@ def _validate_resume_consistency(
             pred_path = pred_dir / f"{key}.npz"
             if not pred_path.is_file():
                 raise ArtifactError(f"missing prediction file for completed fold {key}")
-            payload = np.load(pred_path)
-            valid_index = payload["valid_index"]
-            valid_pred = payload["valid_pred"]
-            expected_index = np.flatnonzero(expected_folds == fold_id)
-            if not np.array_equal(valid_index, expected_index):
-                raise ArtifactError(f"prediction indices mismatch for {key}; refusing to resume")
-            if len(valid_pred) != len(valid_index):
-                raise ArtifactError(f"prediction length mismatch for {key}")
-            if not np.isfinite(valid_pred).all():
-                raise ArtifactError(f"non-finite predictions in {key}")
+            try:
+                _load_fold_predictions(
+                    pred_path,
+                    ids=ids,
+                    test_ids=test_ids,
+                    expected_valid_index=np.flatnonzero(expected_folds == fold_id),
+                    label=key,
+                )
+            except AlignmentError as exc:
+                raise ArtifactError(f"{key}: {exc}; refusing to resume") from exc
+
+
+def _load_fold_predictions(
+    path: Path,
+    *,
+    ids: np.ndarray,
+    test_ids: np.ndarray,
+    expected_valid_index: np.ndarray | None = None,
+    label: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Load one fold payload and align OOF/test predictions by ID when available."""
+    payload = np.load(path)
+    valid_index = np.asarray(payload["valid_index"])
+    valid_pred = np.asarray(payload["valid_pred"], dtype=float)
+    test_pred = np.asarray(payload["test_pred"], dtype=float)
+
+    if expected_valid_index is not None and not np.array_equal(valid_index, expected_valid_index):
+        raise ArtifactError(f"prediction indices mismatch for {label}")
+    if len(valid_pred) != len(valid_index):
+        raise ArtifactError(f"prediction length mismatch for {label}")
+    if not np.isfinite(valid_pred).all():
+        raise ArtifactError(f"non-finite OOF predictions in {label}")
+
+    if "valid_ids" in payload.files:
+        valid_ids = np.asarray(payload["valid_ids"])
+        if not np.array_equal(valid_ids, ids[valid_index]):
+            raise AlignmentError(f"valid ids disagree with train id order for {label}")
+
+    if "test_ids" in payload.files:
+        test_pred = align_predictions_to_ids(
+            test_ids,
+            payload["test_ids"],
+            test_pred,
+            label=f"{label} test",
+        )
+    elif len(test_pred) != len(test_ids):
+        raise AlignmentError(
+            f"{label} test prediction length {len(test_pred)} != test rows {len(test_ids)}"
+        )
+    elif not np.isfinite(test_pred).all():
+        raise AlignmentError(f"non-finite test predictions in {label}")
+
+    return valid_index, valid_pred, test_pred
 
 
 def _aggregate_and_write(
@@ -356,10 +418,15 @@ def _aggregate_and_write(
     for seed in seeds:
         for fold_id in range(n_splits):
             key = _fold_key(seed, fold_id)
-            payload = np.load(pred_dir / f"{key}.npz")
-            valid_index = payload["valid_index"]
-            valid_pred = payload["valid_pred"]
-            test_pred = payload["test_pred"]
+            try:
+                valid_index, valid_pred, test_pred = _load_fold_predictions(
+                    pred_dir / f"{key}.npz",
+                    ids=ids,
+                    test_ids=test_ids,
+                    label=key,
+                )
+            except AlignmentError as exc:
+                raise TrainingError(str(exc)) from exc
 
             oof_sum[valid_index] += valid_pred
             oof_count[valid_index] += 1.0

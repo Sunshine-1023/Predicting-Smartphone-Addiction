@@ -77,6 +77,5 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 [tool.ruff.lint.per-file-ignores]
 # Typer requires Option()/Argument() calls in function defaults.
 "src/smartphone_addiction/cli.py" = ["B008"]
-"scripts/build_features.py" = ["E402"]
 "scripts/verify_environment.py" = ["SIM103"]
 "scripts/write_data_validation_report.py" = ["E402"]

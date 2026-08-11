@@ -11,8 +11,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from smartphone_addiction.alignment import align_predictions_to_ids, assert_unique_ids
 from smartphone_addiction.data.schema import ID_COLUMN, TARGET_COLUMN
-from smartphone_addiction.errors import SubmissionValidationError
+from smartphone_addiction.errors import AlignmentError, SubmissionValidationError
 
 REQUIRED_COLUMNS = [ID_COLUMN, TARGET_COLUMN]
 
@@ -22,33 +23,32 @@ def build_submission(
     ids: pd.Series | np.ndarray,
     predictions: np.ndarray,
 ) -> pd.DataFrame:
-    """Build a submission frame aligned to sample_submission id order."""
+    """Build a submission frame aligned to sample_submission id order by ID join."""
     if ID_COLUMN not in sample.columns or TARGET_COLUMN not in sample.columns:
         raise SubmissionValidationError(
             f"sample submission must contain columns {REQUIRED_COLUMNS}"
         )
 
-    sample_ids = sample[ID_COLUMN].reset_index(drop=True)
-    pred_ids = pd.Series(ids).reset_index(drop=True)
-    preds = np.asarray(predictions, dtype=float)
+    try:
+        sample_ids = assert_unique_ids(sample[ID_COLUMN], label="sample id")
+        aligned = align_predictions_to_ids(
+            sample_ids,
+            ids,
+            predictions,
+            label="submission predictions",
+        )
+    except AlignmentError as exc:
+        raise SubmissionValidationError(str(exc)) from exc
 
-    if len(preds) != len(sample_ids):
-        raise SubmissionValidationError(
-            f"prediction length {len(preds)} != sample rows {len(sample_ids)}"
-        )
-    if not pred_ids.equals(sample_ids):
-        raise SubmissionValidationError(
-            "prediction ids must match sample submission ids in the same order"
-        )
-    if not np.isfinite(preds).all():
+    if not np.isfinite(aligned).all():
         raise SubmissionValidationError("predictions must be finite")
-    if np.any(preds < 0.0) or np.any(preds > 1.0):
+    if np.any(aligned < 0.0) or np.any(aligned > 1.0):
         raise SubmissionValidationError("predictions must lie in [0, 1]")
 
     return pd.DataFrame(
         {
             ID_COLUMN: sample_ids.to_numpy(),
-            TARGET_COLUMN: preds,
+            TARGET_COLUMN: aligned,
         }
     )
 
@@ -59,16 +59,20 @@ def validate_submission_frame(frame: pd.DataFrame, sample: pd.DataFrame | None =
         raise SubmissionValidationError(
             f"submission columns must be exactly {REQUIRED_COLUMNS}, got {list(frame.columns)}"
         )
-    if frame[ID_COLUMN].isna().any():
-        raise SubmissionValidationError("submission id must not contain missing values")
-    if not frame[ID_COLUMN].is_unique:
-        raise SubmissionValidationError("submission id must be unique")
+    try:
+        assert_unique_ids(frame[ID_COLUMN], label="submission id")
+    except AlignmentError as exc:
+        raise SubmissionValidationError(str(exc)) from exc
     preds = frame[TARGET_COLUMN].to_numpy(dtype=float)
     if not np.isfinite(preds).all():
         raise SubmissionValidationError("predictions must be finite")
     if np.any(preds < 0.0) or np.any(preds > 1.0):
         raise SubmissionValidationError("predictions must lie in [0, 1]")
     if sample is not None:
+        try:
+            assert_unique_ids(sample[ID_COLUMN], label="sample id")
+        except AlignmentError as exc:
+            raise SubmissionValidationError(str(exc)) from exc
         if len(frame) != len(sample):
             raise SubmissionValidationError("submission row count must match sample submission")
         if not (
@@ -85,21 +89,27 @@ def write_submission(
     *,
     sample: pd.DataFrame | None = None,
     metadata: dict[str, Any] | None = None,
+    force: bool = False,
 ) -> dict[str, Path]:
-    """Atomically write submission CSV and sidecar JSON metadata."""
+    """Write submission CSV and sidecar JSON as a best-effort transactional pair."""
     validate_submission_frame(frame, sample=sample)
     output_csv = Path(output_csv)
-    output_csv.parent.mkdir(parents=True, exist_ok=True)
     sidecar = output_csv.with_name(output_csv.stem + ".meta.json")
+    if not force and (output_csv.exists() or sidecar.exists()):
+        raise SubmissionValidationError(
+            f"submission output already exists: {output_csv}; pass force=True to replace"
+        )
+    output_csv.parent.mkdir(parents=True, exist_ok=True)
 
     tmp_csv = output_csv.with_suffix(output_csv.suffix + ".tmp")
+    tmp_json = sidecar.with_suffix(sidecar.suffix + ".tmp")
+    backup_csv = output_csv.with_suffix(output_csv.suffix + ".bak")
+    backup_meta = sidecar.with_suffix(sidecar.suffix + ".bak")
+
     frame.to_csv(tmp_csv, index=False)
-    tmp_csv.replace(output_csv)
-
-    reloaded = pd.read_csv(output_csv)
+    reloaded = pd.read_csv(tmp_csv)
     validate_submission_frame(reloaded, sample=sample)
-
-    sha256 = hashlib.sha256(output_csv.read_bytes()).hexdigest()
+    sha256 = hashlib.sha256(tmp_csv.read_bytes()).hexdigest()
     payload = {
         "created_at": datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "csv_path": str(output_csv),
@@ -109,22 +119,58 @@ def write_submission(
     }
     if metadata:
         payload.update(metadata)
-
-    tmp_json = sidecar.with_suffix(sidecar.suffix + ".tmp")
     tmp_json.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    tmp_json.replace(sidecar)
+
+    # Stage both temps first; publish CSV then meta; roll back CSV if meta publish fails.
+    for path in (backup_csv, backup_meta):
+        if path.exists():
+            path.unlink()
+    if output_csv.exists():
+        output_csv.replace(backup_csv)
+    if sidecar.exists():
+        sidecar.replace(backup_meta)
+    try:
+        tmp_csv.replace(output_csv)
+        try:
+            tmp_json.replace(sidecar)
+        except Exception:
+            if output_csv.exists():
+                output_csv.unlink()
+            if backup_csv.exists():
+                backup_csv.replace(output_csv)
+            if backup_meta.exists() and not sidecar.exists():
+                backup_meta.replace(sidecar)
+            raise
+    except Exception:
+        if not output_csv.exists() and backup_csv.exists():
+            backup_csv.replace(output_csv)
+        if not sidecar.exists() and backup_meta.exists():
+            backup_meta.replace(sidecar)
+        raise
+    finally:
+        for path in (tmp_csv, tmp_json, backup_csv, backup_meta):
+            if path.exists():
+                path.unlink()
 
     return {"csv": output_csv, "meta": sidecar}
+
+
+def default_submission_csv(run_dir: Path | str) -> Path:
+    """Derive a stable local submission path from a run/blend directory name."""
+    return Path("submissions") / f"{Path(run_dir).name}.csv"
 
 
 def build_submission_from_run(
     *,
     run_dir: Path | str,
     sample: pd.DataFrame,
-    output_csv: Path | str,
+    output_csv: Path | str | None = None,
+    force: bool = False,
 ) -> dict[str, Path]:
     """Create a submission from a completed training run directory."""
     run_dir = Path(run_dir)
+    if output_csv is None:
+        output_csv = default_submission_csv(run_dir)
     manifest_path = run_dir / "manifest.json"
     if not manifest_path.is_file():
         raise SubmissionValidationError(f"missing run manifest: {manifest_path}")
@@ -159,4 +205,10 @@ def build_submission_from_run(
         metadata["oof_auc"] = metrics.get("oof_auc")
         metadata["model_name"] = metrics.get("model_name")
         metadata["seeds"] = metrics.get("seeds")
-    return write_submission(frame, output_csv, sample=sample, metadata=metadata)
+    return write_submission(
+        frame,
+        output_csv,
+        sample=sample,
+        metadata=metadata,
+        force=force,
+    )

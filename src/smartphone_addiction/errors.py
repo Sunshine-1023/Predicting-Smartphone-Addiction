@@ -19,3 +19,7 @@ class ArtifactError(Exception):
 
 class SubmissionValidationError(Exception):
     """Submission CSV failed validation."""
+
+
+class AlignmentError(Exception):
+    """Prediction ids failed uniqueness, set, order, or join checks."""

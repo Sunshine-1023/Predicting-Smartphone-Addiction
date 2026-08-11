@@ -8,8 +8,7 @@ from typing import Protocol
 import numpy as np
 import pandas as pd
 
-MISSING_TOKEN = "__MISSING__"
-UNKNOWN_TOKEN = "__UNKNOWN__"
+from smartphone_addiction.features.domain import MISSING_TOKEN
 
 
 class ModelAdapter(Protocol):

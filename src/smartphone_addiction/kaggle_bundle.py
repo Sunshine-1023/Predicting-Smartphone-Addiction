@@ -247,7 +247,7 @@ def package_kaggle_bundle(
                 'export SMARTPHONE_ADDICTION_ROOT="$ROOT"',
                 'cd "$ROOT"',
                 'python -m pip install --no-deps "$(ls smartphone_addiction-*.whl | head -n 1)"',
-                "python verify_environment.py",
+                "python verify_environment.py --train-only",
                 'DATA_DIR="${DATA_DIR:-}"',
                 "TRAIN_ARGS=(",
                 f'  --base "{base_rel}"',

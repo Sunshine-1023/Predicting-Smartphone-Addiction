@@ -130,11 +130,15 @@
     "package_version": "0.1.0",
     "files": {
       "data/schema.py": "c557906fe5efc876cd86f911dc221707a9c8e6e127937328ff36fa69e745a3e0",
-      "features/base.py": "c4d2256903fb673a1a0d65e9c7324b68dfc07f552456f24a5e7e5ddec95b9eab",
-      "features/domain.py": "c7c7fbdced7e062c122d155902461c7bf4e75cd70191b18cece64caa418b9cbe",
-      "features/io.py": "e87980dcf014917049fe3edd2982f5c714d4ae311b45febe5a2fb092ec45faa2"
+      "features/base.py": "96f947f7414f92932d493fba33d660e94f8dcd52b5a73d6257f086f9d95c2bae",
+      "features/domain.py": "1d4c5f8ffd28e1fb0b2ffde81fb4778097ae3ad0f080cb73d62e9d4176650f38",
+      "features/io.py": "7e4f30b21e9e5cb01031813ba1e87c8a17e23ce5ffc33d2d0c4885269a8b46f8"
     },
-    "digest": "4204fbd11dc1537ec5dd23c5ffdee4e962020d37fe600542c04fe3c6f8581a91"
+    "digest": "c5462733aeac30865865bf107dbe9f0379f53d5e8d4016e425e24349800ba3ee"
+  },
+  "content_hashes": {
+    "train": "3da7f24ab89cf8cad02c0f366180106ab7f64a38bf9ff65d24e9fa1d145bbee2",
+    "test": "df4f3e85058b4bac451f7874a4d15498b15304cc40dccfd7658f8e650a7f22a4"
   },
   "rules": {
     "numeric_missing": "keep_nan",

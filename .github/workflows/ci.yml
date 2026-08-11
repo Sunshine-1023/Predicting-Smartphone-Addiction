@@ -36,8 +36,13 @@ jobs:
 
       # Notebooks are excluded from Ruff (see pyproject.toml) but must stay output-free.
 
-      - name: Pytest (exclude slow)
-        run: python -m pytest -m "not slow" -q
+      - name: Pytest (exclude slow) and guard reports/
+        run: |
+          before="$(mktemp)"
+          bash scripts/check_reports_unchanged.sh snapshot "$before"
+          python -m pytest -m "not slow" -q
+          bash scripts/check_reports_unchanged.sh check "$before"
+          rm -f "$before"
 
       - name: Build wheel
         run: python -m build
@@ -65,7 +70,16 @@ jobs:
 
       - name: detect-secrets
         run: |
-          python -m detect_secrets scan --baseline .secrets.baseline
+          # Use the pre-commit hook entrypoint: fails on new secrets and does
+          # not rewrite .secrets.baseline (unlike `detect-secrets scan --baseline`).
+          python - <<'PY'
+          import subprocess
+          import sys
+          from detect_secrets.pre_commit_hook import main
+
+          files = subprocess.check_output(["git", "ls-files"], text=True).splitlines()
+          raise SystemExit(main(["--baseline", ".secrets.baseline", *files]))
+          PY
 
       - name: Forbid tracked competition artifacts
         run: |

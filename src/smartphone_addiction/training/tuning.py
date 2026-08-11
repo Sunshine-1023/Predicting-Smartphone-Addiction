@@ -147,6 +147,16 @@ def evaluate_params_oof(
     return float(summarize_oof(y, oof).auc)
 
 
+def merge_tuning_params(
+    base_params: dict[str, Any] | None,
+    suggested: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge YAML fixed params with Optuna suggestions (suggestions win on overlap)."""
+    params = dict(base_params or {})
+    params.update(suggested)
+    return params
+
+
 def make_tuning_objective(
     *,
     model_name: str,
@@ -154,13 +164,15 @@ def make_tuning_objective(
     feature_columns: list[str],
     categorical_columns: list[str],
     budget: TuningBudget | None = None,
+    base_params: dict[str, Any] | None = None,
 ) -> Callable[[optuna.Trial], float]:
     """Build an Optuna objective that never persists trial models."""
     budget = budget or TuningBudget()
     sample = stratified_sample(train, budget.sample_fraction, budget.seed)
+    fixed = dict(base_params or {})
 
     def objective(trial: optuna.Trial) -> float:
-        params = suggest_params(model_name, trial)
+        params = merge_tuning_params(fixed, suggest_params(model_name, trial))
         return evaluate_params_oof(
             model_name=model_name,
             params=params,
@@ -181,7 +193,10 @@ def run_tuning(
     output_dir: Path | str,
     budget: TuningBudget | None = None,
     study_name: str | None = None,
+    study_suffix: str | None = None,
     storage: str | None = None,
+    fresh_study: bool = False,
+    base_params: dict[str, Any] | None = None,
 ) -> TuningResult:
     """Run a bounded Optuna study, export trials.csv and top candidate YAMLs."""
     model_name = model_name.lower().strip()
@@ -198,11 +213,16 @@ def run_tuning(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     study_name = study_name or f"{model_name}-tune"
+    if study_suffix:
+        study_name = f"{study_name}-{study_suffix}"
     if storage is None:
-        db_path = output_dir / "optuna.db"
+        db_path = output_dir / f"{study_name}.db"
         storage = f"sqlite:///{db_path.resolve()}"
     else:
         db_path = Path(str(storage).removeprefix("sqlite:///"))
+
+    if fresh_study:
+        _delete_study_if_exists(study_name=study_name, storage=storage, db_path=db_path)
 
     sampler = TPESampler(seed=budget.seed)
     study = optuna.create_study(
@@ -210,7 +230,7 @@ def run_tuning(
         storage=storage,
         direction="maximize",
         sampler=sampler,
-        load_if_exists=True,
+        load_if_exists=not fresh_study,
     )
     remaining = max(0, budget.n_trials - len(study.trials))
     if remaining > 0:
@@ -223,12 +243,15 @@ def run_tuning(
         model_name=model_name,
         output_dir=output_dir,
         n_candidates=budget.n_candidates,
+        base_params=base_params,
     )
     (output_dir / "tuning_meta.json").write_text(
         json.dumps(
             {
                 "model_name": model_name,
                 "study_name": study_name,
+                "study_suffix": study_suffix,
+                "fresh_study": fresh_study,
                 "n_trials": len(study.trials),
                 "budget": {
                     "sample_fraction": budget.sample_fraction,
@@ -253,12 +276,27 @@ def run_tuning(
     )
 
 
+def _delete_study_if_exists(*, study_name: str, storage: str, db_path: Path) -> None:
+    """Remove an existing Optuna study so ``fresh_study`` can recreate it cleanly."""
+    try:
+        optuna.delete_study(study_name=study_name, storage=storage)
+    except KeyError:
+        pass
+    except Exception:
+        # Dedicated sqlite files can be removed wholesale when delete_study fails.
+        if storage.startswith("sqlite:///") and db_path.is_file():
+            db_path.unlink()
+        else:
+            raise
+
+
 def export_top_candidates(
     *,
     study: optuna.Study,
     model_name: str,
     output_dir: Path,
     n_candidates: int = 3,
+    base_params: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[Path]]:
     """Export the best complete trials as ranked YAML configs."""
     completed = [
@@ -271,9 +309,10 @@ def export_top_candidates(
     top_params: list[dict[str, Any]] = []
     paths: list[Path] = []
     for rank, trial in enumerate(selected, start=1):
-        params = dict(trial.params)
+        suggested = dict(trial.params)
         # Restore early_stopping default used during suggest_* helpers.
-        params.setdefault("early_stopping_rounds", 50)
+        suggested.setdefault("early_stopping_rounds", 50)
+        params = merge_tuning_params(base_params, suggested)
         # Candidate YAML must be loadable by RunConfig (extra="forbid").
         # Optuna trial metadata is written to a sidecar JSON, not the YAML.
         payload = {
