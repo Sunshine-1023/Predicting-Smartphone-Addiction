@@ -22,6 +22,7 @@ from smartphone_addiction.evaluation.metrics import summarize_oof
 from smartphone_addiction.models.catboost import build_catboost
 from smartphone_addiction.models.lightgbm import build_lightgbm
 from smartphone_addiction.training.cv import make_folds
+from smartphone_addiction.training.masking import MaskingSettings, augment_training_fold
 from smartphone_addiction.training.runner import run_training
 
 SUPPORTED_MODELS = frozenset({"catboost", "lightgbm"})
@@ -126,19 +127,49 @@ def evaluate_params_oof(
     categorical_columns: list[str],
     n_splits: int,
     seed: int,
+    test: pd.DataFrame | None = None,
+    masking: dict[str, Any] | MaskingSettings | None = None,
 ) -> float:
-    """Fit one parameter set with stratified OOF and return ROC-AUC."""
+    """Fit one parameter set with stratified OOF and return ROC-AUC.
+
+    When masking is enabled, train-fold copies are generated the same way as
+    ``run_training`` (valid/test stay unmasked). Test features are required
+    only to sample core missingness patterns.
+    """
+    masking_settings = (
+        masking if isinstance(masking, MaskingSettings) else MaskingSettings.from_mapping(masking)
+    )
     y = train[TARGET_COLUMN].to_numpy()
     x = train[feature_columns]
+    x_test = None
+    if masking_settings.enabled:
+        if test is None:
+            raise TrainingError(
+                "evaluate_params_oof requires test features when masking is enabled"
+            )
+        missing = [column for column in feature_columns if column not in test.columns]
+        if missing:
+            raise TrainingError(f"test is missing feature columns required for masking: {missing}")
+        x_test = test[feature_columns]
     fold_ids = make_folds(y, n_splits=n_splits, seed=seed)
     oof = np.full(len(train), np.nan, dtype=float)
     for fold_id in range(n_splits):
         train_mask = fold_ids != fold_id
         valid_mask = fold_ids == fold_id
+        x_train = x.loc[train_mask]
+        y_train = y[train_mask]
+        x_train_fit, y_train_fit = _maybe_augment_train_fold(
+            x_train,
+            y_train,
+            test_features=x_test,
+            masking_settings=masking_settings,
+            seed=seed,
+            fold_id=fold_id,
+        )
         model = _build_model(model_name, categorical_columns, params, seed=seed)
         model.fit(
-            x.loc[train_mask],
-            y[train_mask],
+            x_train_fit,
+            y_train_fit,
             x.loc[valid_mask],
             y[valid_mask],
         )
@@ -165,11 +196,16 @@ def make_tuning_objective(
     categorical_columns: list[str],
     budget: TuningBudget | None = None,
     base_params: dict[str, Any] | None = None,
+    test: pd.DataFrame | None = None,
+    masking: dict[str, Any] | MaskingSettings | None = None,
 ) -> Callable[[optuna.Trial], float]:
     """Build an Optuna objective that never persists trial models."""
     budget = budget or TuningBudget()
     sample = stratified_sample(train, budget.sample_fraction, budget.seed)
     fixed = dict(base_params or {})
+    masking_settings = (
+        masking if isinstance(masking, MaskingSettings) else MaskingSettings.from_mapping(masking)
+    )
 
     def objective(trial: optuna.Trial) -> float:
         params = merge_tuning_params(fixed, suggest_params(model_name, trial))
@@ -181,6 +217,8 @@ def make_tuning_objective(
             categorical_columns=categorical_columns,
             n_splits=budget.n_splits,
             seed=budget.seed,
+            test=test,
+            masking=masking_settings,
         )
 
     return objective
@@ -353,6 +391,7 @@ def evaluate_candidates(
     categorical_columns: list[str],
     feature_groups: list[str],
     exclude_columns: list[str] | None = None,
+    masking: dict[str, Any] | MaskingSettings | None = None,
     artifact_root: Path | str,
     output_dir: Path | str,
     n_splits: int = 5,
@@ -367,6 +406,9 @@ def evaluate_candidates(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     artifact_root = Path(artifact_root)
+    masking_settings = (
+        masking if isinstance(masking, MaskingSettings) else MaskingSettings.from_mapping(masking)
+    )
     rows: list[dict[str, Any]] = []
 
     candidate_iter = tqdm(
@@ -393,6 +435,7 @@ def evaluate_candidates(
             categorical_columns=categorical_columns,
             feature_groups=feature_groups,
             exclude_columns=exclude_columns,
+            masking=masking_settings,
             model_name=model_name,
             model_params=model_params,
             n_splits=n_splits,
@@ -434,7 +477,11 @@ def evaluate_candidates(
         "params"
     ]
     selected_payload = {
-        "features": {"groups": list(feature_groups)},
+        "features": {
+            "groups": list(feature_groups),
+            "exclude_columns": list(exclude_columns or []),
+            "masking": masking_settings.to_dict(),
+        },
         "model": {"name": best["model_name"], "params": best_params},
     }
     selected_yaml = output_dir / "selected_final.yaml"
@@ -449,6 +496,7 @@ def evaluate_candidates(
                 "n_candidates": len(rows),
                 "n_splits": n_splits,
                 "seeds": seeds,
+                "masking": masking_settings.to_dict(),
                 "best": best,
                 "ranking": rows,
                 "selected_yaml": str(selected_yaml),
@@ -513,6 +561,35 @@ def promote_candidate(
         encoding="utf-8",
     )
     return output_yaml
+
+
+def _maybe_augment_train_fold(
+    x_train: pd.DataFrame,
+    y_train: np.ndarray,
+    *,
+    test_features: pd.DataFrame | None,
+    masking_settings: MaskingSettings,
+    seed: int,
+    fold_id: int,
+) -> tuple[pd.DataFrame, np.ndarray]:
+    """Match ``run_training``: append masked copies when masking is enabled."""
+    if not masking_settings.enabled:
+        return x_train, y_train
+    if test_features is None:
+        raise TrainingError("masking requires test features for pattern sampling")
+    x_masked, y_masked = augment_training_fold(
+        x_train,
+        y_train,
+        test_features=test_features,
+        settings=masking_settings,
+        seed=seed,
+        fold_id=fold_id,
+    )
+    if len(x_masked) == 0:
+        return x_train, y_train
+    x_train_fit = pd.concat([x_train, x_masked], axis=0, ignore_index=True)
+    y_train_fit = np.concatenate([y_train, y_masked])
+    return x_train_fit, y_train_fit
 
 
 def _write_trials_csv(study: optuna.Study, path: Path) -> None:

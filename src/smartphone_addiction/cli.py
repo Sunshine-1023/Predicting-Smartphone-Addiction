@@ -506,6 +506,8 @@ def tune(
             categorical_columns=categorical_columns,
             budget=budget,
             base_params=base_params,
+            test=test_df,
+            masking=config.features.masking.model_dump(),
         )
         study_suffix = hashlib.sha256(
             json.dumps(
@@ -515,6 +517,7 @@ def tune(
                     "n_splits": budget.n_splits,
                     "seed": budget.seed,
                     "model_params": base_params,
+                    "masking": config.features.masking.model_dump(),
                 },
                 sort_keys=True,
             ).encode("utf-8")
@@ -582,10 +585,15 @@ def evaluate_candidates_cmd(
             train_path=train_path,
             test_path=test_path,
         )
-        feature_columns = select_feature_columns_from_groups(
-            list(manifest["feature_columns"]),
-            list(config.features.groups),
+        feature_columns = exclude_feature_columns(
+            select_feature_columns_from_groups(
+                list(manifest["feature_columns"]),
+                list(config.features.groups),
+            ),
+            list(config.features.exclude_columns),
         )
+        if not feature_columns:
+            _fail("feature groups selected zero columns from the processed manifest")
         categorical_columns = [
             column for column in list(manifest["categorical_columns"]) if column in feature_columns
         ]
@@ -597,6 +605,7 @@ def evaluate_candidates_cmd(
             categorical_columns=categorical_columns,
             feature_groups=list(config.features.groups),
             exclude_columns=list(config.features.exclude_columns),
+            masking=config.features.masking.model_dump(),
             artifact_root=Path(config.artifacts.directory),
             output_dir=resolve_path(output_dir, root),
             n_splits=config.cv.n_splits,
