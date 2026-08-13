@@ -1,0 +1,31 @@
+# Current winning LightGBM recipe (masked-v2 features + directed search params).
+# Confirmed seed42 5-fold: artifacts/runs/20260813T100627Z-lightgbm-dev-80612a1 (OOF 0.96615)
+# 3-seed final: artifacts/runs/20260813T101620Z-lightgbm-final-80612a1 (OOF 0.96663, Public LB 0.96781)
+features:
+  groups:
+    - raw
+    - missingness
+    - behavioral_totals
+    - behavioral_deltas
+    - log_counts
+  exclude_columns:
+    - missing_pattern
+  masking:
+    enabled: true
+    fraction: 0.20
+    fields: core5
+    compatible_sources: false
+    sample_weight: false
+model:
+  name: lightgbm
+  params:
+    n_estimators: 3000
+    num_leaves: 95
+    learning_rate: 0.05
+    min_child_samples: 200
+    max_bin: 1023
+    reg_alpha: 1.0
+    reg_lambda: 10.0
+    path_smooth: 5.0
+    early_stopping_rounds: 100
+    n_jobs: 4

@@ -93,6 +93,7 @@ class LightGBMAdapter:
         *,
         show_progress: bool = False,
         progress_desc: str = "lightgbm",
+        sample_weight: np.ndarray | None = None,
     ) -> LightGBMAdapter:
         self._feature_columns = list(x.columns)
         cat_cols = [c for c in self.categorical_columns if c in x.columns]
@@ -133,6 +134,8 @@ class LightGBMAdapter:
                     "categorical_feature": cat_cols,
                     "callbacks": callbacks,
                 }
+                if sample_weight is not None:
+                    fit_kwargs["sample_weight"] = np.asarray(sample_weight, dtype=float)
                 # Prefer eval_X/eval_y when available (LightGBM 4.5+); avoid try/except.
                 if "eval_X" in inspect.signature(model.fit).parameters:
                     fit_kwargs["eval_X"] = x_eval
@@ -142,6 +145,8 @@ class LightGBMAdapter:
                 model.fit(x_train, y_train, **fit_kwargs)
             else:
                 fit_kwargs = {"categorical_feature": cat_cols}
+                if sample_weight is not None:
+                    fit_kwargs["sample_weight"] = np.asarray(sample_weight, dtype=float)
                 if bar is not None:
                     fit_kwargs["callbacks"] = [make_lightgbm_tqdm_callback(bar)]
                 model.fit(x_train, y_train, **fit_kwargs)

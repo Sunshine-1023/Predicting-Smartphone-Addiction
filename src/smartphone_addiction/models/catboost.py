@@ -55,13 +55,19 @@ class CatBoostAdapter:
         *,
         show_progress: bool = False,
         progress_desc: str = "catboost",
+        sample_weight: np.ndarray | None = None,
     ) -> CatBoostAdapter:
         self._feature_columns = list(x.columns)
         cat_cols = [c for c in self.categorical_columns if c in x.columns]
         x_train = prepare_categorical_frame(x, cat_cols)
         y_train = np.asarray(y)
 
-        train_pool = Pool(x_train, y_train, cat_features=cat_cols)
+        train_pool = Pool(
+            x_train,
+            y_train,
+            cat_features=cat_cols,
+            weight=None if sample_weight is None else np.asarray(sample_weight, dtype=float),
+        )
         eval_set = None
         if x_valid is not None and y_valid is not None:
             x_eval = prepare_categorical_frame(x_valid[self._feature_columns], cat_cols)

@@ -34,7 +34,11 @@ from smartphone_addiction.features.base import (
 from smartphone_addiction.models.catboost import build_catboost
 from smartphone_addiction.models.lightgbm import build_lightgbm
 from smartphone_addiction.training.cv import make_folds
-from smartphone_addiction.training.masking import MaskingSettings, augment_training_fold
+from smartphone_addiction.training.masking import (
+    MaskingSettings,
+    augment_training_fold,
+    concat_fit_sample_weight,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -241,7 +245,7 @@ def run_training(
             x_train = x_all.loc[train_mask]
             x_valid = x_all.loc[valid_mask]
             y_train = y[train_mask]
-            x_masked, y_masked = augment_training_fold(
+            x_masked, y_masked, w_masked = augment_training_fold(
                 x_train,
                 y_train,
                 test_features=x_test,
@@ -249,9 +253,11 @@ def run_training(
                 seed=seed,
                 fold_id=fold_id,
             )
+            sample_weight: np.ndarray | None = None
             if len(x_masked) > 0:
                 x_train_fit = pd.concat([x_train, x_masked], axis=0, ignore_index=True)
                 y_train_fit = np.concatenate([y_train, y_masked])
+                sample_weight = concat_fit_sample_weight(len(x_train), w_masked, masking_settings)
             else:
                 x_train_fit = x_train
                 y_train_fit = y_train
@@ -270,6 +276,7 @@ def run_training(
                 y[valid_mask],
                 show_progress=True,
                 progress_desc=key,
+                sample_weight=sample_weight,
             )
             valid_pred = model.predict_proba(x_valid)
             test_pred = model.predict_proba(x_test)

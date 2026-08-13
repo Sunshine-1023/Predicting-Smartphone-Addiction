@@ -585,18 +585,19 @@ def evaluate_candidates_cmd(
             train_path=train_path,
             test_path=test_path,
         )
-        feature_columns = exclude_feature_columns(
+        # Pass the full manifest list; run_training applies groups then exclude.
+        # Pre-dropping exclude_columns here makes missingness.groups fail require_all.
+        feature_columns = list(manifest["feature_columns"])
+        selected = exclude_feature_columns(
             select_feature_columns_from_groups(
-                list(manifest["feature_columns"]),
+                feature_columns,
                 list(config.features.groups),
             ),
             list(config.features.exclude_columns),
         )
-        if not feature_columns:
+        if not selected:
             _fail("feature groups selected zero columns from the processed manifest")
-        categorical_columns = [
-            column for column in list(manifest["categorical_columns"]) if column in feature_columns
-        ]
+        categorical_columns = list(manifest["categorical_columns"])
         result = evaluate_candidates(
             candidate_yamls=[resolve_path(path, root) for path in candidates],
             train=train_df,

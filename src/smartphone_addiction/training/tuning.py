@@ -22,7 +22,11 @@ from smartphone_addiction.evaluation.metrics import summarize_oof
 from smartphone_addiction.models.catboost import build_catboost
 from smartphone_addiction.models.lightgbm import build_lightgbm
 from smartphone_addiction.training.cv import make_folds
-from smartphone_addiction.training.masking import MaskingSettings, augment_training_fold
+from smartphone_addiction.training.masking import (
+    MaskingSettings,
+    augment_training_fold,
+    concat_fit_sample_weight,
+)
 from smartphone_addiction.training.runner import run_training
 
 SUPPORTED_MODELS = frozenset({"catboost", "lightgbm"})
@@ -158,7 +162,7 @@ def evaluate_params_oof(
         valid_mask = fold_ids == fold_id
         x_train = x.loc[train_mask]
         y_train = y[train_mask]
-        x_train_fit, y_train_fit = _maybe_augment_train_fold(
+        x_train_fit, y_train_fit, sample_weight = _maybe_augment_train_fold(
             x_train,
             y_train,
             test_features=x_test,
@@ -172,6 +176,7 @@ def evaluate_params_oof(
             y_train_fit,
             x.loc[valid_mask],
             y[valid_mask],
+            sample_weight=sample_weight,
         )
         oof[valid_mask] = model.predict_proba(x.loc[valid_mask])
         del model
@@ -480,7 +485,7 @@ def evaluate_candidates(
         "features": {
             "groups": list(feature_groups),
             "exclude_columns": list(exclude_columns or []),
-            "masking": masking_settings.to_dict(),
+            "masking": masking_settings.to_config_dict(),
         },
         "model": {"name": best["model_name"], "params": best_params},
     }
@@ -571,13 +576,13 @@ def _maybe_augment_train_fold(
     masking_settings: MaskingSettings,
     seed: int,
     fold_id: int,
-) -> tuple[pd.DataFrame, np.ndarray]:
+) -> tuple[pd.DataFrame, np.ndarray, np.ndarray | None]:
     """Match ``run_training``: append masked copies when masking is enabled."""
     if not masking_settings.enabled:
-        return x_train, y_train
+        return x_train, y_train, None
     if test_features is None:
         raise TrainingError("masking requires test features for pattern sampling")
-    x_masked, y_masked = augment_training_fold(
+    x_masked, y_masked, w_masked = augment_training_fold(
         x_train,
         y_train,
         test_features=test_features,
@@ -586,10 +591,11 @@ def _maybe_augment_train_fold(
         fold_id=fold_id,
     )
     if len(x_masked) == 0:
-        return x_train, y_train
+        return x_train, y_train, None
     x_train_fit = pd.concat([x_train, x_masked], axis=0, ignore_index=True)
     y_train_fit = np.concatenate([y_train, y_masked])
-    return x_train_fit, y_train_fit
+    sample_weight = concat_fit_sample_weight(len(x_train), w_masked, masking_settings)
+    return x_train_fit, y_train_fit, sample_weight
 
 
 def _write_trials_csv(study: optuna.Study, path: Path) -> None:

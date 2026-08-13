@@ -119,7 +119,7 @@ tune:
 	smartphone-addiction tune \
 		--profile configs/profiles/smoke.yaml \
 		--model-config configs/models/lightgbm.yaml \
-		--experiment configs/experiments/lightgbm_masked_v2.yaml \
+		--experiment configs/experiments/lightgbm_masked_v3.yaml \
 		--n-trials 20
 
 submission:

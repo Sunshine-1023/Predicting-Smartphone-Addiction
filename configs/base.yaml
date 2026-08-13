@@ -15,6 +15,9 @@ features:
   masking:
     enabled: false
     fraction: 0.20
+    fields: core5
+    compatible_sources: false
+    sample_weight: false
 tuning:
   sample_fraction: 0.5
   n_trials: 20

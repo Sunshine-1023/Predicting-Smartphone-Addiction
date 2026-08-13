@@ -198,7 +198,8 @@ def test_promote_candidate_writes_train_ready_yaml(tmp_path: Path) -> None:
     assert payload["model"]["params"]["depth"] == 7
     assert payload["features"]["groups"] == ["raw", "missingness"]
     assert payload["features"]["exclude_columns"] == ["missing_pattern"]
-    assert payload["features"]["masking"] == {"enabled": True, "fraction": 0.2}
+    assert payload["features"]["masking"]["enabled"] is True
+    assert payload["features"]["masking"]["fraction"] == 0.2
     assert "selection" not in payload
     assert path.with_suffix(".meta.json").is_file()
 
@@ -362,7 +363,13 @@ def test_evaluate_candidates_forwards_masking(
     assert masking.enabled is True
     assert masking.fraction == 0.20
     selected = yaml.safe_load(result.selected_yaml.read_text(encoding="utf-8"))
-    assert selected["features"]["masking"] == {"enabled": True, "fraction": 0.2}
+    assert selected["features"]["masking"]["enabled"] is True
+    assert selected["features"]["masking"]["fraction"] == 0.2
+    assert selected["features"]["masking"]["fields"] == "core5"
+    assert selected["features"]["masking"]["compatible_sources"] is False
+    assert selected["features"]["masking"]["sample_weight"] is False
     assert selected["features"]["exclude_columns"] == ["missing_pattern"]
     selection = json.loads(result.selection_json.read_text(encoding="utf-8"))
     assert selection["masking"]["enabled"] is True
+    assert selection["masking"]["fields"] == "core5"
+    assert selection["masking"]["version"] == 3

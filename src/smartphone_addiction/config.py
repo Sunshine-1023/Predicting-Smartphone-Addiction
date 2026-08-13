@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -77,6 +77,9 @@ class MaskingConfig(BaseModel):
 
     enabled: bool = False
     fraction: float = 0.20
+    fields: Literal["core5", "top8"] = "core5"
+    compatible_sources: bool = False
+    sample_weight: bool = False
 
     @field_validator("fraction")
     @classmethod

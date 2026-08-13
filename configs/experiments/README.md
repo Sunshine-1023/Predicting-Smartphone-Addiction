@@ -12,7 +12,9 @@ configs/base.yaml
 
 ## Active experiment files
 
-- `lightgbm_masked_v2.yaml` — winning LightGBM recipe (masking 0.20; drop
+- `lightgbm_masked_v3.yaml` — current winning LightGBM recipe (v2 features +
+  directed search params; Public LB 0.96781)
+- `lightgbm_masked_v2.yaml` — previous LightGBM recipe (masking 0.20; drop
   `missing_pattern`, `categorical_interactions`, `behavioral_ratios`)
 - `catboost_domain_v1.yaml` / `lightgbm_domain_v1.yaml` — original full domain
   feature groups (used by `make train*` targets)

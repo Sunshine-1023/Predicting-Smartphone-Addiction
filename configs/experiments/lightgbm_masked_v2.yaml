@@ -1,5 +1,6 @@
 # Current winning LightGBM recipe (Task 6 + Task 7.1–7.2 + 7.5).
-# masking 0.20; drop missing_pattern, categorical_interactions, behavioral_ratios.
+# masking v2: core5 fields, complete source rows only, no sample_weight;
+# fraction 0.20; drop missing_pattern, categorical_interactions, behavioral_ratios.
 # Keep deltas and log_counts (ablations 3–4 did not justify removal).
 features:
   groups:
@@ -13,5 +14,8 @@ features:
   masking:
     enabled: true
     fraction: 0.20
+    fields: core5
+    compatible_sources: false
+    sample_weight: false
 model:
   name: lightgbm

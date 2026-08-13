@@ -20,6 +20,8 @@ class ModelAdapter(Protocol):
         y: pd.Series | np.ndarray,
         x_valid: pd.DataFrame | None = None,
         y_valid: pd.Series | np.ndarray | None = None,
+        *,
+        sample_weight: np.ndarray | None = None,
     ) -> ModelAdapter:
         """Fit on the current training fold; optional validation fold for early stopping."""
 

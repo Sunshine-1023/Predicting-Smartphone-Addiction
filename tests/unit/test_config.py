@@ -106,6 +106,9 @@ def test_base_config_has_masking_defaults() -> None:
     assert config.features.exclude_columns == []
     assert config.features.masking.enabled is False
     assert config.features.masking.fraction == 0.20
+    assert config.features.masking.fields == "core5"
+    assert config.features.masking.compatible_sources is False
+    assert config.features.masking.sample_weight is False
 
 
 def test_masked_experiment_loads() -> None:
@@ -119,10 +122,35 @@ def test_masked_experiment_loads() -> None:
     )
     assert config.features.masking.enabled is True
     assert config.features.masking.fraction == 0.20
+    assert config.features.masking.fields == "core5"
+    assert config.features.masking.compatible_sources is False
+    assert config.features.masking.sample_weight is False
     assert config.features.exclude_columns == ["missing_pattern"]
     assert "categorical_interactions" not in config.features.groups
     assert "behavioral_ratios" not in config.features.groups
     assert config.model.name == "lightgbm"
+
+
+def test_masked_v3_experiment_loads() -> None:
+    root = project_root()
+    config = load_config(
+        [
+            root / "configs/base.yaml",
+            root / "configs/experiments/lightgbm_masked_v3.yaml",
+        ],
+        resolve=False,
+    )
+    assert config.features.masking.enabled is True
+    assert config.features.masking.fields == "core5"
+    assert config.features.masking.compatible_sources is False
+    assert config.features.masking.sample_weight is False
+    assert config.features.exclude_columns == ["missing_pattern"]
+    assert config.model.params["max_bin"] == 1023
+    assert config.model.params["num_leaves"] == 95
+    assert config.model.params["min_child_samples"] == 200
+    assert config.model.params["reg_alpha"] == 1.0
+    assert config.model.params["reg_lambda"] == 10.0
+    assert config.model.params["path_smooth"] == 5.0
 
 
 def test_duplicate_seeds_rejected() -> None:
