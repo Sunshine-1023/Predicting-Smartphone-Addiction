@@ -130,11 +130,13 @@
     "package_version": "0.1.0",
     "files": {
       "data/schema.py": "c557906fe5efc876cd86f911dc221707a9c8e6e127937328ff36fa69e745a3e0",
-      "features/base.py": "96f947f7414f92932d493fba33d660e94f8dcd52b5a73d6257f086f9d95c2bae",
+      "features/base.py": "88feed298f9e90c8beab2889c053d301e490f6753b0f4259948f04e4eea39146",
       "features/domain.py": "1d4c5f8ffd28e1fb0b2ffde81fb4778097ae3ad0f080cb73d62e9d4176650f38",
-      "features/io.py": "7e4f30b21e9e5cb01031813ba1e87c8a17e23ce5ffc33d2d0c4885269a8b46f8"
+      "features/fold.py": "57118f114e5cfb1aa96773a43c996f944eeacab96cdd9e5860326c69c4d7cc4b",
+      "features/imputation.py": "76fe4e74a024c86b35d26ae630eade2bbb366eb396d7a50d9bae3cd29684887e",
+      "features/io.py": "91b3d3de1c2c15677fabc83ee4b335a784d9cfd5623fae32e3f6cabbe3cbec35"
     },
-    "digest": "c5462733aeac30865865bf107dbe9f0379f53d5e8d4016e425e24349800ba3ee"
+    "digest": "483b81a5ef6e179a8560ae69e171135cff700b2ce0da87a36a20d60080e901e0"
   },
   "content_hashes": {
     "train": "3da7f24ab89cf8cad02c0f366180106ab7f64a38bf9ff65d24e9fa1d145bbee2",

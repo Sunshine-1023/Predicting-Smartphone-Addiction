@@ -38,7 +38,6 @@ class RuntimeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     threads: int = 4
-    environment: str = "local"
 
     @field_validator("threads")
     @classmethod
@@ -71,10 +70,28 @@ class CVConfig(BaseModel):
         return value
 
 
+class MaskingConfig(BaseModel):
+    """Train-fold core-field masking augmentation (disabled by default)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    fraction: float = 0.20
+
+    @field_validator("fraction")
+    @classmethod
+    def _fraction_range(cls, value: float) -> float:
+        if not 0.0 < value <= 1.0:
+            raise ValueError("features.masking.fraction must be in (0, 1]")
+        return value
+
+
 class FeatureConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     groups: list[str] = Field(default_factory=lambda: ["raw"])
+    exclude_columns: list[str] = Field(default_factory=list)
+    masking: MaskingConfig = Field(default_factory=MaskingConfig)
 
 
 class TuningConfig(BaseModel):
@@ -119,10 +136,6 @@ class ModelConfig(BaseModel):
 class RunConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    competition: str
-    target: str
-    id_column: str
-    metric: str
     data: DataConfig
     artifacts: ArtifactConfig
     runtime: RuntimeConfig

@@ -115,3 +115,16 @@ def test_select_feature_columns_can_disable_require_all() -> None:
         require_all=False,
     )
     assert selected == available
+
+
+def test_exclude_feature_columns_drops_named_and_rejects_unknown() -> None:
+    from smartphone_addiction.errors import DataValidationError
+    from smartphone_addiction.features.base import exclude_feature_columns
+
+    kept = exclude_feature_columns(["a", "b", "c"], ["b"])
+    assert kept == ["a", "c"]
+    assert exclude_feature_columns(["a", "b"], []) == ["a", "b"]
+    with pytest.raises(DataValidationError, match="exclude_columns"):
+        exclude_feature_columns(["a", "b"], ["missing_pattern"])
+    with pytest.raises(DataValidationError, match="removed all"):
+        exclude_feature_columns(["a"], ["a"])

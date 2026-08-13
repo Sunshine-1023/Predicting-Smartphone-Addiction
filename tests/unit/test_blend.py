@@ -177,6 +177,23 @@ def test_blend_rejects_oof_id_set_mismatch(tmp_path: Path) -> None:
         )
 
 
+def test_blend_allows_different_feature_hashes(tmp_path: Path) -> None:
+    ids = np.arange(4)
+    y = np.array([0, 0, 1, 1])
+    oof = pd.DataFrame({ID_COLUMN: ids, TARGET_COLUMN: y, "prediction": [0.1, 0.2, 0.8, 0.9]})
+    test = pd.DataFrame({ID_COLUMN: [10, 11], "prediction": [0.4, 0.6]})
+    run_a = tmp_path / "run_a"
+    run_b = tmp_path / "run_b"
+    _write_completed_run(run_a, oof, test, data_hashes={"train": "aaa", "feature_manifest": "x"})
+    _write_completed_run(run_b, oof, test, data_hashes={"train": "bbb", "feature_manifest": "y"})
+    payload = blend_run_predictions(
+        first_run_dir=run_a,
+        second_run_dir=run_b,
+        output_dir=tmp_path / "blend",
+    )
+    assert payload["auc"] >= 0.5
+
+
 def test_blend_rejects_incomplete_source_run(tmp_path: Path) -> None:
     ids = np.arange(4)
     y = np.array([0, 0, 1, 1])

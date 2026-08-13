@@ -12,8 +12,10 @@ configs/base.yaml
 
 ## Active experiment files
 
-- `catboost_domain_v1.yaml` / `lightgbm_domain_v1.yaml` — full domain feature groups
-  (used by all `make train*` targets)
+- `lightgbm_masked_v2.yaml` — winning LightGBM recipe (masking 0.20; drop
+  `missing_pattern`, `categorical_interactions`, `behavioral_ratios`)
+- `catboost_domain_v1.yaml` / `lightgbm_domain_v1.yaml` — original full domain
+  feature groups (used by `make train*` targets)
 
 ## Archived (not used in final workflow)
 

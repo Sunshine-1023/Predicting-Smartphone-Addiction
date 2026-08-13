@@ -25,13 +25,16 @@ from smartphone_addiction.errors import (
     TrainingError,
 )
 from smartphone_addiction.evaluation.metrics import summarize_oof
+from smartphone_addiction.evaluation.slices import compute_slice_metrics
 from smartphone_addiction.features.base import (
+    exclude_feature_columns,
     select_feature_columns_from_groups,
     transform_competition_frames,
 )
 from smartphone_addiction.models.catboost import build_catboost
 from smartphone_addiction.models.lightgbm import build_lightgbm
 from smartphone_addiction.training.cv import make_folds
+from smartphone_addiction.training.masking import MaskingSettings, augment_training_fold
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +80,8 @@ def run_training(
     feature_columns: list[str] | None = None,
     categorical_columns: list[str] | None = None,
     feature_groups: list[str] | None = None,
+    exclude_columns: list[str] | None = None,
+    masking: dict[str, Any] | MaskingSettings | None = None,
     n_splits: int = 5,
     seeds: list[int] | None = None,
     git_sha: str = "localdev",
@@ -103,6 +108,9 @@ def run_training(
 
     seeds = list(seeds or [42])
     model_params = dict(model_params or {})
+    masking_settings = (
+        masking if isinstance(masking, MaskingSettings) else MaskingSettings.from_mapping(masking)
+    )
 
     train_df, test_df, feature_cols, cat_cols = _resolve_frames(
         frames=frames,
@@ -111,6 +119,7 @@ def run_training(
         feature_columns=feature_columns,
         categorical_columns=categorical_columns,
         feature_groups=feature_groups,
+        exclude_columns=exclude_columns,
     )
 
     computed_hashes = compute_training_data_hashes(train_df, test_df, feature_cols, cat_cols)
@@ -127,6 +136,8 @@ def run_training(
             "feature_columns": feature_cols,
             "categorical_columns": cat_cols,
             "groups": list(feature_groups) if feature_groups is not None else None,
+            "exclude_columns": list(exclude_columns or []),
+            "masking": masking_settings.to_dict(),
         },
         "n_train_rows": len(train_df),
         "n_test_rows": len(test_df),
@@ -158,6 +169,7 @@ def run_training(
             feature_cols=feature_cols,
             seeds=seeds,
             n_splits=n_splits,
+            masking_settings=masking_settings,
             completed_keys=[key for key in expected_fold_keys if key not in pending_keys],
         )
     else:
@@ -185,6 +197,7 @@ def run_training(
         {
             "feature_columns": feature_cols,
             "categorical_columns": cat_cols,
+            "masking": masking_settings.to_dict(),
         },
     )
 
@@ -210,6 +223,12 @@ def run_training(
             unit="fold",
             leave=True,
         )
+        model_feature_cols = list(feature_cols)
+        if not fold_jobs:
+            existing_names = store.run_dir / "feature_names.json"
+            if existing_names.is_file():
+                saved_names = json.loads(existing_names.read_text(encoding="utf-8"))
+                model_feature_cols = list(saved_names.get("feature_columns") or feature_cols)
         for seed, fold_id in progress:
             key = _fold_key(seed, fold_id)
             fold_ids = fold_ids_by_seed[seed]
@@ -219,6 +238,25 @@ def run_training(
             valid_mask = fold_ids == fold_id
             valid_index = np.flatnonzero(valid_mask)
 
+            x_train = x_all.loc[train_mask]
+            x_valid = x_all.loc[valid_mask]
+            y_train = y[train_mask]
+            x_masked, y_masked = augment_training_fold(
+                x_train,
+                y_train,
+                test_features=x_test,
+                settings=masking_settings,
+                seed=seed,
+                fold_id=fold_id,
+            )
+            if len(x_masked) > 0:
+                x_train_fit = pd.concat([x_train, x_masked], axis=0, ignore_index=True)
+                y_train_fit = np.concatenate([y_train, y_masked])
+            else:
+                x_train_fit = x_train
+                y_train_fit = y_train
+            model_feature_cols = list(x_train_fit.columns)
+
             model = _build_model(
                 model_name,
                 cat_cols,
@@ -226,14 +264,14 @@ def run_training(
                 seed=seed,
             )
             model.fit(
-                x_all.loc[train_mask],
-                y[train_mask],
-                x_all.loc[valid_mask],
+                x_train_fit,
+                y_train_fit,
+                x_valid,
                 y[valid_mask],
                 show_progress=True,
                 progress_desc=key,
             )
-            valid_pred = model.predict_proba(x_all.loc[valid_mask])
+            valid_pred = model.predict_proba(x_valid)
             test_pred = model.predict_proba(x_test)
             valid_ids = ids[valid_index]
 
@@ -253,9 +291,11 @@ def run_training(
                 "fold_key": key,
                 "auc": fold_auc,
                 "n_train": int(train_mask.sum()),
+                "n_train_masked": len(x_masked),
                 "n_valid": int(valid_mask.sum()),
                 "best_iteration": model.best_iteration,
                 "model_seed": int(seed),
+                "n_features": len(model_feature_cols),
             }
             suffix = ".cbm" if model_name == "catboost" else ".joblib"
             model.save(store.run_dir / "models" / f"{key}{suffix}")
@@ -263,6 +303,15 @@ def run_training(
             progress.set_postfix_str(f"{key} auc={fold_auc:.4f}")
             logger.info("completed %s auc=%.6f model_seed=%s", key, fold_auc, seed)
             del model
+
+        store.write_json(
+            "feature_names.json",
+            {
+                "feature_columns": model_feature_cols,
+                "categorical_columns": cat_cols,
+                "masking": masking_settings.to_dict(),
+            },
+        )
 
         metrics = _aggregate_and_write(
             store=store,
@@ -274,7 +323,9 @@ def run_training(
             ids=ids,
             test_ids=test_ids,
             y=y,
-            feature_cols=feature_cols,
+            feature_cols=model_feature_cols,
+            train_features=train_df,
+            test_features=test_df,
         )
         if git_dirty:
             metrics["git_dirty"] = True
@@ -301,14 +352,19 @@ def _validate_resume_consistency(
     feature_cols: list[str],
     seeds: list[int],
     n_splits: int,
+    masking_settings: MaskingSettings,
     completed_keys: list[str],
 ) -> None:
     """Ensure saved folds/predictions still match the current frames."""
     feature_path = store.run_dir / "feature_names.json"
     if feature_path.is_file():
         saved = json.loads(feature_path.read_text(encoding="utf-8"))
-        if list(saved.get("feature_columns", [])) != list(feature_cols):
+        saved_cols = list(saved.get("feature_columns", []))
+        if saved_cols != list(feature_cols):
             raise ArtifactError("feature column order/content mismatch; refusing to resume")
+        saved_masking = saved.get("masking") or MaskingSettings().to_dict()
+        if saved_masking != masking_settings.to_dict():
+            raise ArtifactError("masking config mismatch; refusing to resume")
 
     pred_dir = store.run_dir / "fold_predictions"
     for seed in seeds:
@@ -395,6 +451,8 @@ def _aggregate_and_write(
     test_ids: np.ndarray,
     y: np.ndarray,
     feature_cols: list[str],
+    train_features: pd.DataFrame,
+    test_features: pd.DataFrame,
 ) -> dict[str, Any]:
     missing = [key for key in expected_fold_keys if not (pred_dir / f"{key}.npz").is_file()]
     if missing:
@@ -455,6 +513,14 @@ def _aggregate_and_write(
     test_mean = test_sum / float(test_count)
     overall = summarize_oof(y, oof_mean)
 
+    slice_metrics = compute_slice_metrics(
+        train_features,
+        y,
+        oof_mean,
+        test_features=test_features,
+    )
+    store.write_json("slice_metrics.json", slice_metrics)
+
     metrics: dict[str, Any] = {
         "oof_auc": overall.auc,
         "oof_coverage": overall.coverage,
@@ -462,6 +528,12 @@ def _aggregate_and_write(
         "oof_pred_max": overall.max,
         "oof_pred_mean": overall.mean,
         "oof_pred_std": overall.std,
+        "core_complete_auc": slice_metrics.get("core_complete_auc"),
+        "core_incomplete_auc": slice_metrics.get("core_incomplete_auc"),
+        "top3_incomplete_auc": slice_metrics.get("top3_incomplete_auc"),
+        "test_pattern_weighted_auc": slice_metrics.get("test_pattern_weighted_auc"),
+        "n_core_complete": slice_metrics.get("n_core_complete"),
+        "n_core_incomplete": slice_metrics.get("n_core_incomplete"),
         "seed_aucs": {str(seed): seed_aucs[seed] for seed in seeds},
         "seed_auc_mean": float(np.mean(list(seed_aucs.values()))),
         "seed_auc_std": float(np.std(list(seed_aucs.values()), ddof=0)),
@@ -499,6 +571,7 @@ def _resolve_frames(
     feature_columns: list[str] | None,
     categorical_columns: list[str] | None,
     feature_groups: list[str] | None,
+    exclude_columns: list[str] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[str], list[str]]:
     if frames is not None:
         if isinstance(frames, CompetitionFrames):
@@ -510,11 +583,20 @@ def _resolve_frames(
             raw_test,
             groups=feature_groups,
         )
+        feature_columns = list(transformed.feature_columns)
+        categorical_columns = list(transformed.categorical_columns)
+        try:
+            feature_columns = exclude_feature_columns(feature_columns, exclude_columns)
+        except DataValidationError as exc:
+            raise TrainingError(str(exc)) from exc
+        categorical_columns = [
+            column for column in categorical_columns if column in feature_columns
+        ]
         return (
             transformed.train,
             transformed.test,
-            list(transformed.feature_columns),
-            list(transformed.categorical_columns),
+            feature_columns,
+            categorical_columns,
         )
 
     if train is None or test is None:
@@ -535,6 +617,10 @@ def _resolve_frames(
             raise TrainingError(str(exc)) from exc
         if not feature_columns:
             raise TrainingError("feature_groups selected zero columns from the processed frame")
+    try:
+        feature_columns = exclude_feature_columns(feature_columns, exclude_columns)
+    except DataValidationError as exc:
+        raise TrainingError(str(exc)) from exc
     if categorical_columns is None:
         categorical_columns = [
             column

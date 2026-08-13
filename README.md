@@ -15,12 +15,14 @@ with `features.groups`, typed YAML config, OOF runner (smoke/dev/final),
 rank/probability blend, submission builder + Kaggle CLI upload (`make submit`),
 offline Kaggle packaging, pre-commit + GitHub Actions.
 
-**Completed (2026-08-10):** smoke/dev/final training, first Kaggle submissions,
-selected blend (Public LB **0.96368**). See `reports/final_report.md`,
+**Completed (2026-08-13):** winning LightGBM recipe `lightgbm_masked_v2.yaml`
+(masking 0.20; 34 features; drop `missing_pattern` / interactions / ratios).
+Public LB **0.96543** (OOF 0.96425). Previous best was a CatBoost+LightGBM
+rank blend at **0.96368**. See `reports/final_report.md`,
 `reports/submissions.csv`, and `reports/experiment_summary.csv`.
 
-**Not pursued:** Optuna tuning, feature ablations, extra blend variants.
-Archived tune/finalist configs live under `configs/experiments/archive/`.
+**Not pursued:** Optuna tuning. Archived tune/finalist configs live under
+`configs/experiments/archive/`.
 
 ## 中文说明
 
@@ -31,7 +33,9 @@ Archived tune/finalist configs live under `configs/experiments/archive/`.
 - **数据**：只用官方 `train.csv` / `test.csv` / `sample_submission.csv`；
   原始文件只读，处理后的特征写在 `data/processed/`（clone 后需 `make features`）。
 - **验证**：分层 K 折 OOF；final 阶段 5-fold × seeds `42, 2026, 3407`。
-- **最佳提交**：CatBoost-dev + LightGBM-final rank blend（0.4/0.6），Public LB 0.96368。
+- **最佳提交**：LightGBM `lightgbm_masked_v2`（masking 0.20；34 列），
+  Public LB **0.96543**（OOF 0.96425）。此前最佳为 CatBoost-dev + LightGBM-final
+  rank blend（0.4/0.6），Public LB 0.96368。
 - **报告**：`reports/final_report.md`、`reports/data_validation.md`。
 
 设计与实施文档见 `plan/2026-08-06-data-processing-implementation.md`。
@@ -101,6 +105,7 @@ make build
 CLI 示例：
 
 ```bash
+smartphone-addiction train -p configs/profiles/dev.yaml -m configs/models/lightgbm.yaml -e configs/experiments/lightgbm_masked_v2.yaml
 smartphone-addiction train -p configs/profiles/smoke.yaml -m configs/models/catboost.yaml -e configs/experiments/catboost_domain_v1.yaml
 smartphone-addiction train -p configs/profiles/smoke.yaml -m configs/models/lightgbm.yaml -e configs/experiments/lightgbm_domain_v1.yaml
 smartphone-addiction features build -g raw -g missingness
@@ -129,8 +134,9 @@ configs/base.yaml
 特征组：`raw` / `missingness` / `behavioral_totals` / `behavioral_ratios` /
 `behavioral_deltas` / `log_counts` / `categorical_interactions`。
 
-生产训练使用 `configs/experiments/catboost_domain_v1.yaml` 与
-`lightgbm_domain_v1.yaml`。Optuna / finalist 占位配置见 `configs/experiments/archive/`。
+当前胜出配方是 `configs/experiments/lightgbm_masked_v2.yaml`。
+`catboost_domain_v1.yaml` / `lightgbm_domain_v1.yaml` 仍是 Makefile `train*`
+默认的全组 domain 配置。Optuna / finalist 占位配置见 `configs/experiments/archive/`。
 
 ## CI
 

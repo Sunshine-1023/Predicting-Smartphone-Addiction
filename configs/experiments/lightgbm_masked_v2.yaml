@@ -1,0 +1,17 @@
+# Current winning LightGBM recipe (Task 6 + Task 7.1–7.2 + 7.5).
+# masking 0.20; drop missing_pattern, categorical_interactions, behavioral_ratios.
+# Keep deltas and log_counts (ablations 3–4 did not justify removal).
+features:
+  groups:
+    - raw
+    - missingness
+    - behavioral_totals
+    - behavioral_deltas
+    - log_counts
+  exclude_columns:
+    - missing_pattern
+  masking:
+    enabled: true
+    fraction: 0.20
+model:
+  name: lightgbm

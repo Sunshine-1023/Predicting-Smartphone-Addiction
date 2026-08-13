@@ -254,7 +254,6 @@ def package_kaggle_bundle(
                 f'  --profile "{profile_rel}"',
                 f'  --model-config "{model_rel}"',
                 f'  --experiment "{experiment_rel}"',
-                '  --override "runtime.environment=kaggle"',
                 ")",
                 'if [[ -n "$DATA_DIR" ]]; then',
                 '  TRAIN_ARGS+=(--raw --override "data.directory=$DATA_DIR")',

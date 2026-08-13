@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -55,7 +56,14 @@ def test_catboost_smoke_pipeline_creates_complete_oof(
     assert result.metrics["oof_coverage"] == 1.0
     assert result.store.manifest().status == "completed"
     assert (result.run_dir / "metrics.json").is_file()
+    assert (result.run_dir / "slice_metrics.json").is_file()
+    slice_payload = json.loads((result.run_dir / "slice_metrics.json").read_text(encoding="utf-8"))
+    assert "core_complete_auc" in slice_payload
+    assert "core_incomplete_auc" in slice_payload
     assert (result.run_dir / "models" / "seed42-fold0.cbm").is_file()
+    names = json.loads((result.run_dir / "feature_names.json").read_text(encoding="utf-8"))
+    assert "fold" not in names
+    assert "fold_feature_columns" not in names
     hashes = result.store.manifest().data_hashes
     assert set(hashes) >= {"train", "test", "feature_manifest"}
     assert hashes["train"] != "in-memory"

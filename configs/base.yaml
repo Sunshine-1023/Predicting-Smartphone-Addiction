@@ -1,7 +1,3 @@
-competition: playground-series-s6e8
-target: addicted_label
-id_column: id
-metric: roc_auc
 data:
   directory: data/raw
   processed_directory: data/processed
@@ -10,12 +6,15 @@ artifacts:
   directory: artifacts/runs
 runtime:
   threads: 4
-  environment: local
 cv:
   n_splits: 5
   seeds: [42]
 features:
   groups: [raw]
+  exclude_columns: []
+  masking:
+    enabled: false
+    fraction: 0.20
 tuning:
   sample_fraction: 0.5
   n_trials: 20

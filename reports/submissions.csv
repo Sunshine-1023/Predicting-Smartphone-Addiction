@@ -1,3 +1,4 @@
 utc_time,run_id,local_oof_auc,public_lb,private_lb,submission_csv,notes
 2026-08-10T06:50:32Z,20260809T022155Z-lightgbm-final-6532ed6,0.96239,0.96336,,submissions/submission.csv,first submission lightgbm final via make submit
 2026-08-10T06:58:08Z,20260807T071924Z-catboost-dev-6532ed6__20260809T022155Z-lightgbm-final-6532ed6,0.9628,0.96368,,submissions/blend_cb_dev_lgb_final.csv,blend rank 0.4 catboost-dev + 0.6 lightgbm-final; best public LB so far
+2026-08-13T07:18:09Z,20260813T063020Z-lightgbm-final-dcaf81b,0.9642546373512644,0.96543,,submissions/20260813T063020Z-lightgbm-final-dcaf81b.csv,LightGBM final 3-seed; masking 0.20; drop missing_pattern/interactions/ratios; 34 feats; best public LB so far

@@ -66,14 +66,63 @@ def test_resolve_paths_are_absolute() -> None:
     assert str(config.data.directory).endswith("data/raw")
 
 
-def test_rejects_unsupported_model_name() -> None:
+def test_fold_feature_config_is_rejected() -> None:
     root = project_root()
-    with pytest.raises(ConfigurationError):
+    with pytest.raises(ConfigurationError, match="Unknown configuration key"):
         load_config(
             [root / "configs/base.yaml"],
-            ["model.name=logistic"],
+            ["features.fold.enabled=true"],
             resolve=False,
         )
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        "competition=playground-series-s6e8",
+        "target=addicted_label",
+        "id_column=id",
+        "metric=roc_auc",
+        "runtime.environment=kaggle",
+    ],
+)
+def test_unused_identity_config_keys_are_rejected(override: str) -> None:
+    root = project_root()
+    with pytest.raises(ConfigurationError, match="Unknown configuration key"):
+        load_config([root / "configs/base.yaml"], [override], resolve=False)
+
+
+def test_leftover_identity_yaml_keys_are_rejected(tmp_path: Path) -> None:
+    root = project_root()
+    leftover = tmp_path / "leftover.yaml"
+    leftover.write_text("competition: playground-series-s6e8\n", encoding="utf-8")
+    with pytest.raises(ConfigurationError, match="Extra inputs are not permitted"):
+        load_config([root / "configs/base.yaml", leftover], resolve=False)
+
+
+def test_base_config_has_masking_defaults() -> None:
+    root = project_root()
+    config = load_config([root / "configs/base.yaml"], resolve=False)
+    assert config.features.exclude_columns == []
+    assert config.features.masking.enabled is False
+    assert config.features.masking.fraction == 0.20
+
+
+def test_masked_experiment_loads() -> None:
+    root = project_root()
+    config = load_config(
+        [
+            root / "configs/base.yaml",
+            root / "configs/experiments/lightgbm_masked_v2.yaml",
+        ],
+        resolve=False,
+    )
+    assert config.features.masking.enabled is True
+    assert config.features.masking.fraction == 0.20
+    assert config.features.exclude_columns == ["missing_pattern"]
+    assert "categorical_interactions" not in config.features.groups
+    assert "behavioral_ratios" not in config.features.groups
+    assert config.model.name == "lightgbm"
 
 
 def test_duplicate_seeds_rejected() -> None:

@@ -135,6 +135,32 @@ def select_feature_columns_from_groups(
     return [column for column in available_columns if column in wanted_set]
 
 
+def exclude_feature_columns(
+    columns: list[str],
+    exclude: list[str] | None,
+) -> list[str]:
+    """Drop named columns after group selection; reject unknown names."""
+    if not exclude:
+        return list(columns)
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for name in exclude:
+        if name not in seen:
+            ordered.append(name)
+            seen.add(name)
+    available = set(columns)
+    missing = [name for name in ordered if name not in available]
+    if missing:
+        raise DataValidationError(
+            f"features.exclude_columns not present in selected features: {missing}"
+        )
+    drop = set(ordered)
+    kept = [column for column in columns if column not in drop]
+    if not kept:
+        raise DataValidationError("features.exclude_columns removed all feature columns")
+    return kept
+
+
 def _require_columns(frame: pd.DataFrame, expected: list[str], name: str) -> None:
     missing = [column for column in expected if column not in frame.columns]
     if missing:

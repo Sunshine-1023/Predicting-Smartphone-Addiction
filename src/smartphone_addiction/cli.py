@@ -34,6 +34,7 @@ from smartphone_addiction.evaluation.report import (
     write_final_report_scaffold,
 )
 from smartphone_addiction.features.base import (
+    exclude_feature_columns,
     select_feature_columns_from_groups,
     transform_competition_frames,
 )
@@ -315,6 +316,8 @@ def train(
                 feature_columns=feature_columns,
                 categorical_columns=categorical_columns,
                 feature_groups=list(config.features.groups),
+                exclude_columns=list(config.features.exclude_columns),
+                masking=config.features.masking.model_dump(),
                 model_name=config.model.name,
                 model_params=model_params,
                 n_splits=config.cv.n_splits,
@@ -336,6 +339,8 @@ def train(
             result = run_training(
                 frames=frames,
                 feature_groups=list(config.features.groups),
+                exclude_columns=list(config.features.exclude_columns),
+                masking=config.features.masking.model_dump(),
                 model_name=config.model.name,
                 model_params=model_params,
                 n_splits=config.cv.n_splits,
@@ -357,6 +362,10 @@ def train(
     typer.echo(f"status={result.store.manifest().status}")
     typer.echo(f"oof_auc={result.metrics.get('oof_auc')}")
     typer.echo(f"oof_coverage={result.metrics.get('oof_coverage')}")
+    if result.metrics.get("core_complete_auc") is not None:
+        typer.echo(f"core_complete_auc={result.metrics.get('core_complete_auc')}")
+    if result.metrics.get("core_incomplete_auc") is not None:
+        typer.echo(f"core_incomplete_auc={result.metrics.get('core_incomplete_auc')}")
     try:
         digest = feature_code_fingerprint()["digest"] if processed else ""
         summary = upsert_run_to_summary(
@@ -470,9 +479,12 @@ def tune(
             train_path=train_path,
             test_path=test_path,
         )
-        feature_columns = select_feature_columns_from_groups(
-            list(manifest["feature_columns"]),
-            list(config.features.groups),
+        feature_columns = exclude_feature_columns(
+            select_feature_columns_from_groups(
+                list(manifest["feature_columns"]),
+                list(config.features.groups),
+            ),
+            list(config.features.exclude_columns),
         )
         if not feature_columns:
             _fail("feature groups selected zero columns from the processed manifest")
@@ -584,6 +596,7 @@ def evaluate_candidates_cmd(
             feature_columns=feature_columns,
             categorical_columns=categorical_columns,
             feature_groups=list(config.features.groups),
+            exclude_columns=list(config.features.exclude_columns),
             artifact_root=Path(config.artifacts.directory),
             output_dir=resolve_path(output_dir, root),
             n_splits=config.cv.n_splits,

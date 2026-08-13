@@ -224,7 +224,9 @@ def compute_run_importance(
     if not feature_path.is_file():
         raise TrainingError(f"missing feature_names.json in {run_dir}")
     feature_names = json.loads(feature_path.read_text(encoding="utf-8"))
-    feature_columns = list(feature_names.get("feature_columns") or [])
+    feature_columns = list(
+        feature_names.get("base_feature_columns") or feature_names.get("feature_columns") or []
+    )
     categorical_columns = list(feature_names.get("categorical_columns") or [])
     if not feature_columns:
         raise TrainingError(f"feature_names.json missing feature_columns in {run_dir}")
@@ -233,7 +235,7 @@ def compute_run_importance(
         train=train,
         test=test,
         feature_columns=feature_columns,
-        categorical_columns=categorical_columns,
+        categorical_columns=[column for column in categorical_columns if column in feature_columns],
     )
 
     fold_keys = [fold_key] if fold_key is not None else list_fold_keys(run_dir)
@@ -245,13 +247,16 @@ def compute_run_importance(
     per_fold_frames: list[pd.DataFrame] = []
 
     for key in fold_keys:
-        model, feature_columns, _ = load_fold_model(run_dir, fold_key=key)
+        model, model_feature_columns, _ = load_fold_model(run_dir, fold_key=key)
         valid = validation_frame_for_fold(train, run_dir, key)
+        model_feature_columns = [
+            column for column in model_feature_columns if column in valid.columns
+        ]
         frame = permutation_importance_auc(
             model,
             valid,
             valid[TARGET_COLUMN].to_numpy(),
-            feature_columns,
+            model_feature_columns,
             n_repeats=n_repeats,
             sample_rows=sample_rows,
             seed=seed,

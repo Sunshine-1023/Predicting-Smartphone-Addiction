@@ -20,6 +20,8 @@ from smartphone_addiction.alignment import (
 )
 from smartphone_addiction.data.schema import ID_COLUMN, TARGET_COLUMN
 from smartphone_addiction.errors import AlignmentError, TrainingError
+from smartphone_addiction.evaluation.slices import CORE_FIELDS, compute_slice_metrics
+from smartphone_addiction.paths import project_root
 
 BlendMethod = Literal["probability", "rank"]
 
@@ -222,6 +224,7 @@ def _write_blend_artifacts(
     test_frame = pd.DataFrame({ID_COLUMN: test_ids.to_numpy(), "prediction": test_blend})
     test_frame.to_parquet(output_dir / "test_predictions.parquet", index=False)
 
+    slice_metrics = _blend_slice_metrics(oof_frame)
     payload = {
         "first_run_dir": str(first_dir),
         "second_run_dir": str(second_dir),
@@ -242,6 +245,19 @@ def _write_blend_artifacts(
         "second_auc": result.second_auc,
         "correlation": result.correlation,
     }
+    if slice_metrics:
+        for key in (
+            "core_complete_auc",
+            "core_incomplete_auc",
+            "top3_incomplete_auc",
+            "test_pattern_weighted_auc",
+        ):
+            if key in slice_metrics:
+                metrics[key] = slice_metrics[key]
+        (output_dir / "slice_metrics.json").write_text(
+            json.dumps(slice_metrics, indent=2) + "\n",
+            encoding="utf-8",
+        )
     (output_dir / "metrics.json").write_text(
         json.dumps(metrics, indent=2) + "\n",
         encoding="utf-8",
@@ -300,20 +316,14 @@ def _assert_completed_run(run_dir: Path, label: str) -> None:
 def _assert_compatible_source_runs(first_dir: Path, second_dir: Path) -> None:
     first = json.loads((first_dir / "manifest.json").read_text(encoding="utf-8"))
     second = json.loads((second_dir / "manifest.json").read_text(encoding="utf-8"))
-    first_hashes = first.get("data_hashes")
-    second_hashes = second.get("data_hashes")
-    if (
-        isinstance(first_hashes, dict)
-        and isinstance(second_hashes, dict)
-        and first_hashes != second_hashes
-    ):
-        raise TrainingError("blend source runs have different data_hashes; refusing to blend")
     first_n = first.get("n_train_rows")
     second_n = second.get("n_train_rows")
     if first_n is not None and second_n is not None and int(first_n) != int(second_n):
         raise TrainingError(
             f"blend source runs have different n_train_rows ({first_n} vs {second_n})"
         )
+    # Feature-column hashes may differ across models; identity is enforced by
+    # aligned OOF IDs and labels below, not by processed-feature fingerprints.
 
 
 def _aligned_oof_vectors(
@@ -365,3 +375,24 @@ def _aligned_test_vectors(
     except AlignmentError as exc:
         raise TrainingError(str(exc)) from exc
     return base_ids, first_pred, second_pred
+
+
+def _blend_slice_metrics(oof_frame: pd.DataFrame) -> dict[str, Any] | None:
+    """Compute completeness slices when processed core fields are available."""
+    root = project_root()
+    train_path = root / "data" / "processed" / "train_features.parquet"
+    test_path = root / "data" / "processed" / "test_features.parquet"
+    if not train_path.is_file():
+        return None
+    columns = [ID_COLUMN, *CORE_FIELDS]
+    train = pd.read_parquet(train_path, columns=columns)
+    merged = train.merge(oof_frame, on=ID_COLUMN, how="inner")
+    if len(merged) != len(oof_frame):
+        return None
+    test = pd.read_parquet(test_path, columns=columns) if test_path.is_file() else None
+    return compute_slice_metrics(
+        merged[columns],
+        merged[TARGET_COLUMN],
+        merged["prediction"],
+        test_features=test,
+    )
