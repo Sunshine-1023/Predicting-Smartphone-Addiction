@@ -1,0 +1,30 @@
+# LightGBM masked-v3 + fold-local latent.
+# Do not run until reconstruction gate 1 passes. Latent join is wired only after that gate.
+features:
+  groups:
+    - raw
+    - missingness
+    - behavioral_totals
+    - behavioral_deltas
+    - log_counts
+  exclude_columns:
+    - missing_pattern
+  masking:
+    enabled: true
+    fraction: 0.20
+    fields: core5
+    compatible_sources: false
+    sample_weight: false
+model:
+  name: lightgbm
+  params:
+    n_estimators: 3000
+    num_leaves: 95
+    learning_rate: 0.05
+    min_child_samples: 200
+    max_bin: 1023
+    reg_alpha: 1.0
+    reg_lambda: 10.0
+    path_smooth: 5.0
+    early_stopping_rounds: 100
+    n_jobs: 4

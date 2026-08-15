@@ -1,0 +1,39 @@
+device: auto
+model:
+  name: mlp
+  hidden_dim: 128
+  latent_dim: 32
+  n_blocks: 3
+  dropout: 0.10
+  activation: gelu
+  normalization: layer_norm
+  ensemble_size: 4
+  embedding_dim: 8
+training:
+  loss: huber
+  huber_delta: 1.0
+  optimizer: adamw
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  batch_size: 4096
+  max_epochs: 50
+  early_stopping_patience: 5
+  gradient_clip_norm: 1.0
+  holdout_fraction: 0.10
+  dtype: float32
+  seed: 42
+  num_workers: 0
+  pin_memory: false
+masking:
+  min_fields: 1
+  max_fields: 3
+  valid_repeats: 3
+  field_balance_prob: 0.20
+  min_eval_per_field: 50
+gate:
+  r2_min: 0.10
+  spearman_min: 0.30
+  rmse_improvement_min: 0.10
+  min_positive_folds: 3
+  min_passing_fields: 3
+  min_top3_passing: 2

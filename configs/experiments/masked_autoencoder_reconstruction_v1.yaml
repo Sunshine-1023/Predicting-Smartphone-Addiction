@@ -1,0 +1,10 @@
+# Fold-local masked autoencoder reconstruction (no addicted_label in the model).
+data:
+  directory: data/raw
+  sample_rows: null
+artifacts:
+  directory: artifacts/reconstruction
+cv:
+  n_splits: 5
+  seed: 42
+device: auto
