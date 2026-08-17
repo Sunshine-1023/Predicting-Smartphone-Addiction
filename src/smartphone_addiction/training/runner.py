@@ -31,6 +31,7 @@ from smartphone_addiction.features.base import (
     select_feature_columns_from_groups,
     transform_competition_frames,
 )
+from smartphone_addiction.features.latent import join_latent_features
 from smartphone_addiction.models.catboost import build_catboost
 from smartphone_addiction.models.lightgbm import build_lightgbm
 from smartphone_addiction.training.cv import make_folds
@@ -85,6 +86,12 @@ def run_training(
     categorical_columns: list[str] | None = None,
     feature_groups: list[str] | None = None,
     exclude_columns: list[str] | None = None,
+    latent_directory: Path | str | None = None,
+    latent_include: list[str] | None = None,
+    neural_encoder_run: Path | str | None = None,
+    neural_encoder_include: list[str] | None = None,
+    neural_encoder_device: str = "auto",
+    neural_encoder_batch_size: int | None = None,
     masking: dict[str, Any] | MaskingSettings | None = None,
     n_splits: int = 5,
     seeds: list[int] | None = None,
@@ -125,6 +132,39 @@ def run_training(
         feature_groups=feature_groups,
         exclude_columns=exclude_columns,
     )
+    if latent_directory is not None and neural_encoder_run is not None:
+        raise TrainingError(
+            "features.latent.directory and features.neural_encoder.reconstruction_run "
+            "cannot both be set; use fold-native neural_encoder for gate 2"
+        )
+    if latent_directory is not None:
+        train_df, test_df, latent_cols = join_latent_features(
+            train_df,
+            test_df,
+            directory=latent_directory,
+            include=list(latent_include or ["latent"]),  # type: ignore[arg-type]
+        )
+        overlap = [name for name in latent_cols if name in feature_cols]
+        if overlap:
+            raise TrainingError(f"latent columns already present in features: {overlap}")
+        feature_cols = [*feature_cols, *latent_cols]
+
+    encoder_bank = None
+    encoder_feature_names: list[str] = []
+    if neural_encoder_run is not None:
+        from smartphone_addiction.neural.fold_features import load_fold_encoder_bank
+
+        encoder_bank = load_fold_encoder_bank(
+            neural_encoder_run,
+            include=list(neural_encoder_include or ["imputed_core"]),  # type: ignore[arg-type]
+            device=neural_encoder_device,
+            batch_size=neural_encoder_batch_size,
+        )
+        encoder_feature_names = encoder_bank.feature_names()
+        if encoder_bank.n_splits != n_splits:
+            raise TrainingError(
+                f"encoder bank n_splits={encoder_bank.n_splits} != cv n_splits={n_splits}"
+            )
 
     computed_hashes = compute_training_data_hashes(train_df, test_df, feature_cols, cat_cols)
     if data_hashes is not None:
@@ -142,6 +182,11 @@ def run_training(
             "groups": list(feature_groups) if feature_groups is not None else None,
             "exclude_columns": list(exclude_columns or []),
             "masking": masking_settings.to_dict(),
+            "latent_directory": None if latent_directory is None else str(latent_directory),
+            "latent_include": list(latent_include or []),
+            "neural_encoder_run": None if neural_encoder_run is None else str(neural_encoder_run),
+            "neural_encoder_include": list(neural_encoder_include or []),
+            "neural_encoder_features": list(encoder_feature_names),
         },
         "n_train_rows": len(train_df),
         "n_test_rows": len(test_df),
@@ -157,6 +202,11 @@ def run_training(
     except AlignmentError as exc:
         raise TrainingError(str(exc)) from exc
 
+    if encoder_bank is not None and list(seeds) != [42]:
+        raise TrainingError(
+            "fold-native neural_encoder currently requires cv.seeds=[42] "
+            "to match reconstruction fold assignments"
+        )
     if resume_run_dir is not None:
         store = ArtifactStore.open(resume_run_dir)
         pending_keys = store.resume_missing_folds(
@@ -214,6 +264,18 @@ def run_training(
                 f"folds_seed{seed}.parquet",
                 pd.DataFrame({ID_COLUMN: ids, "fold": fold_ids}),
             )
+            if encoder_bank is not None and seed == 42:
+                recon_folds = pd.read_parquet(encoder_bank.run_dir / "fold_assignments.parquet")
+                merged = pd.DataFrame({ID_COLUMN: ids, "fold": fold_ids}).merge(
+                    recon_folds, on=ID_COLUMN, suffixes=("_lgb", "_recon")
+                )
+                if len(merged) != len(ids):
+                    raise TrainingError("reconstruction fold assignments do not cover train ids")
+                if not (merged["fold_lgb"].to_numpy() == merged["fold_recon"].to_numpy()).all():
+                    raise TrainingError(
+                        "LightGBM folds diverge from reconstruction fold_assignments; "
+                        "refusing fold-native encoder join"
+                    )
 
         fold_jobs = [
             (seed, fold_id)
@@ -242,17 +304,36 @@ def run_training(
             valid_mask = fold_ids == fold_id
             valid_index = np.flatnonzero(valid_mask)
 
-            x_train = x_all.loc[train_mask]
-            x_valid = x_all.loc[valid_mask]
+            if encoder_bank is None:
+                x_train = x_all.loc[train_mask]
+                x_valid = x_all.loc[valid_mask]
+                x_test_fold = x_test
+            else:
+                from smartphone_addiction.neural.fold_features import attach_encoder_features
+
+                cols_with_id = [ID_COLUMN, *feature_cols]
+                x_train = train_df.loc[train_mask, cols_with_id].copy()
+                x_valid = train_df.loc[valid_mask, cols_with_id].copy()
+                x_test_fold = test_df.loc[:, cols_with_id].copy()
+
             y_train = y[train_mask]
             x_masked, y_masked, w_masked = augment_training_fold(
                 x_train,
                 y_train,
-                test_features=x_test,
+                test_features=x_test_fold,
                 settings=masking_settings,
                 seed=seed,
                 fold_id=fold_id,
             )
+            if encoder_bank is not None:
+                encoder = encoder_bank.for_fold(fold_id)
+                include = list(encoder_bank.include)
+                x_train = attach_encoder_features(x_train, encoder, include=include)
+                if len(x_masked) > 0:
+                    x_masked = attach_encoder_features(x_masked, encoder, include=include)
+                x_valid = attach_encoder_features(x_valid, encoder, include=include)
+                x_test_fold = attach_encoder_features(x_test_fold, encoder, include=include)
+
             sample_weight: np.ndarray | None = None
             if len(x_masked) > 0:
                 x_train_fit = pd.concat([x_train, x_masked], axis=0, ignore_index=True)
@@ -261,7 +342,10 @@ def run_training(
             else:
                 x_train_fit = x_train
                 y_train_fit = y_train
-            model_feature_cols = list(x_train_fit.columns)
+            model_feature_cols = [column for column in x_train_fit.columns if column != ID_COLUMN]
+            x_train_fit = x_train_fit[model_feature_cols]
+            x_valid_fit = x_valid[model_feature_cols]
+            x_test_fit = x_test_fold[model_feature_cols]
 
             model = _build_model(
                 model_name,
@@ -272,14 +356,14 @@ def run_training(
             model.fit(
                 x_train_fit,
                 y_train_fit,
-                x_valid,
+                x_valid_fit,
                 y[valid_mask],
                 show_progress=True,
                 progress_desc=key,
                 sample_weight=sample_weight,
             )
-            valid_pred = model.predict_proba(x_valid)
-            test_pred = model.predict_proba(x_test)
+            valid_pred = model.predict_proba(x_valid_fit)
+            test_pred = model.predict_proba(x_test_fit)
             valid_ids = ids[valid_index]
 
             np.savez_compressed(

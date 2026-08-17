@@ -1,6 +1,5 @@
-# LightGBM masked-v3 + fold-local MLP latent (gate-2 ablation).
+# LightGBM masked-v3 + 5 core reconstruction means (gate-2 ablation 2).
 # Encoder: artifacts/reconstruction/20260815T155822Z-mlp-mae-3238f7c
-# Do not change tree params / masking relative to lightgbm_masked_v3.yaml.
 features:
   groups:
     - raw
@@ -19,7 +18,7 @@ features:
   latent:
     directory: artifacts/reconstruction/20260815T155822Z-mlp-mae-3238f7c/latent  # pragma: allowlist secret
     include:
-      - latent
+      - recon
 model:
   name: lightgbm
   params:

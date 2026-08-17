@@ -89,12 +89,50 @@ class MaskingConfig(BaseModel):
         return value
 
 
+class LatentFeatureConfig(BaseModel):
+    """Legacy global OOF latent join (invalid for gate 2; kept disabled by default)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    directory: str | None = None
+    include: list[Literal["latent", "recon"]] = Field(default_factory=lambda: ["latent"])
+
+    @field_validator("include")
+    @classmethod
+    def _include_nonempty(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("features.latent.include must be non-empty when set")
+        return value
+
+
+class NeuralEncoderFeatureConfig(BaseModel):
+    """Fold-native encoder features: one encoder per LightGBM outer fold."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reconstruction_run: str | None = None
+    include: list[Literal["imputed_core", "latent"]] = Field(
+        default_factory=lambda: ["imputed_core"]
+    )
+    device: str = "auto"
+    batch_size: int | None = None
+
+    @field_validator("include")
+    @classmethod
+    def _include_nonempty(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("features.neural_encoder.include must be non-empty when set")
+        return value
+
+
 class FeatureConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     groups: list[str] = Field(default_factory=lambda: ["raw"])
     exclude_columns: list[str] = Field(default_factory=list)
     masking: MaskingConfig = Field(default_factory=MaskingConfig)
+    latent: LatentFeatureConfig = Field(default_factory=LatentFeatureConfig)
+    neural_encoder: NeuralEncoderFeatureConfig = Field(default_factory=NeuralEncoderFeatureConfig)
 
 
 class TuningConfig(BaseModel):
@@ -156,6 +194,14 @@ class RunConfig(BaseModel):
             resolve_path(self.data.processed_directory, base)
         )
         payload["artifacts"]["directory"] = str(resolve_path(self.artifacts.directory, base))
+        if self.features.latent.directory is not None:
+            payload["features"]["latent"]["directory"] = str(
+                resolve_path(self.features.latent.directory, base)
+            )
+        if self.features.neural_encoder.reconstruction_run is not None:
+            payload["features"]["neural_encoder"]["reconstruction_run"] = str(
+                resolve_path(self.features.neural_encoder.reconstruction_run, base)
+            )
         return RunConfig.model_validate(payload)
 
 

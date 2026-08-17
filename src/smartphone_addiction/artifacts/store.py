@@ -85,6 +85,9 @@ class ArtifactStore:
             raise ArtifactError(f"cannot start run from status={self._manifest.status!r}")
         self.write_yaml("resolved_config.yaml", config)
         self._manifest.config_hash = hash_mapping(config)
+        features = config.get("features") if isinstance(config.get("features"), dict) else {}
+        self._manifest.neural_encoder_run = features.get("neural_encoder_run")
+        self._manifest.neural_encoder_features = list(features.get("neural_encoder_features") or [])
         self._manifest.data_hashes = dict(data_hashes)
         self._manifest.n_train_rows = n_train_rows
         self._manifest.n_features = n_features

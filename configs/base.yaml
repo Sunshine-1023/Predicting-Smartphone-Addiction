@@ -18,6 +18,14 @@ features:
     fields: core5
     compatible_sources: false
     sample_weight: false
+  latent:
+    directory: null
+    include: [latent]
+  neural_encoder:
+    reconstruction_run: null
+    include: [imputed_core]
+    device: auto
+    batch_size: null
 tuning:
   sample_fraction: 0.5
   n_trials: 20

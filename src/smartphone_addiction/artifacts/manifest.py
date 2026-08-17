@@ -47,6 +47,8 @@ class RunManifest:
     artifacts: dict[str, str] = field(default_factory=dict)
     completed_folds: list[str] = field(default_factory=list)
     error: str | None = None
+    neural_encoder_run: str | None = None
+    neural_encoder_features: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

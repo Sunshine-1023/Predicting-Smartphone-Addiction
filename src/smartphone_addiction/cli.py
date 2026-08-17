@@ -319,6 +319,20 @@ def train(
                 categorical_columns=categorical_columns,
                 feature_groups=list(config.features.groups),
                 exclude_columns=list(config.features.exclude_columns),
+                latent_directory=(
+                    None
+                    if config.features.latent.directory is None
+                    else resolve_path(config.features.latent.directory)
+                ),
+                latent_include=list(config.features.latent.include),
+                neural_encoder_run=(
+                    None
+                    if config.features.neural_encoder.reconstruction_run is None
+                    else resolve_path(config.features.neural_encoder.reconstruction_run)
+                ),
+                neural_encoder_include=list(config.features.neural_encoder.include),
+                neural_encoder_device=config.features.neural_encoder.device,
+                neural_encoder_batch_size=config.features.neural_encoder.batch_size,
                 masking=config.features.masking.model_dump(),
                 model_name=config.model.name,
                 model_params=model_params,
@@ -342,6 +356,20 @@ def train(
                 frames=frames,
                 feature_groups=list(config.features.groups),
                 exclude_columns=list(config.features.exclude_columns),
+                latent_directory=(
+                    None
+                    if config.features.latent.directory is None
+                    else resolve_path(config.features.latent.directory)
+                ),
+                latent_include=list(config.features.latent.include),
+                neural_encoder_run=(
+                    None
+                    if config.features.neural_encoder.reconstruction_run is None
+                    else resolve_path(config.features.neural_encoder.reconstruction_run)
+                ),
+                neural_encoder_include=list(config.features.neural_encoder.include),
+                neural_encoder_device=config.features.neural_encoder.device,
+                neural_encoder_batch_size=config.features.neural_encoder.batch_size,
                 masking=config.features.masking.model_dump(),
                 model_name=config.model.name,
                 model_params=model_params,
@@ -715,25 +743,37 @@ def blend(
     ),
     output_dir: Path = typer.Option(Path("artifacts/blends"), "--output-dir"),
     step: float = typer.Option(0.05, "--step"),
+    method: str | None = typer.Option(None, "--method", help="probability or rank"),
+    first_weight: float | None = typer.Option(None, "--first-weight"),
     force: bool = typer.Option(
         False,
         "--force",
         help="Replace an existing blend output directory",
     ),
 ) -> None:
-    """Search probability/rank blend weights on two OOF runs."""
+    """Blend two OOF runs; omit method/weight to search, or pass both to freeze."""
     if len(runs) != 2:
         _fail("blend requires exactly two --runs directories")
+    if (method is None) != (first_weight is None):
+        _fail("blend --method and --first-weight must be provided together")
+    if method is not None and method not in {"probability", "rank"}:
+        _fail("blend --method must be probability or rank")
     root = project_root()
     try:
         first = resolve_path(runs[0], root)
         second = resolve_path(runs[1], root)
-        out = resolve_path(output_dir, root) / f"{first.name}__{second.name}"
+        resolved_out = resolve_path(output_dir, root)
+        if output_dir == Path("artifacts/blends") or resolved_out.name == "blends":
+            out = resolved_out / f"{first.name}__{second.name}"
+        else:
+            out = resolved_out
         payload = blend_run_predictions(
             first_run_dir=first,
             second_run_dir=second,
             output_dir=out,
             step=step,
+            fixed_method=method,  # type: ignore[arg-type]
+            fixed_first_weight=first_weight,
             force=force,
         )
     except DOMAIN_ERRORS as exc:
@@ -742,6 +782,7 @@ def blend(
         _fail(f"blend failed: {exc}")
     typer.echo(f"output_dir={out}")
     typer.echo(f"method={payload['method']}")
+    typer.echo(f"selection_mode={payload.get('selection_mode')}")
     typer.echo(f"first_weight={payload['first_weight']}")
     typer.echo(f"oof_auc={payload['auc']}")
     try:
@@ -898,6 +939,28 @@ def neural_reconstruct(
         payload = json.loads(gate_path.read_text(encoding="utf-8"))
         typer.echo(f"gate_passed={payload.get('passed')}")
         typer.echo(f"smoke={payload.get('smoke')}")
+
+
+@neural_app.command("export-latent")
+def neural_export_latent(
+    run_dir: Path = typer.Option(..., "--run-dir", help="Gated reconstruction run directory"),
+    device: str | None = typer.Option(None, "--device", help="auto, mps, or cpu"),
+    batch_size: int | None = typer.Option(None, "--batch-size"),
+) -> None:
+    """Export fold-local OOF train latent and mean test latent from a gated run."""
+    try:
+        from smartphone_addiction.neural.export import export_latents_from_run
+
+        out_dir = export_latents_from_run(
+            resolve_path(run_dir),
+            device=device,
+            batch_size=batch_size,
+        )
+    except ImportError as exc:
+        _fail(str(exc))
+    except DOMAIN_ERRORS as exc:
+        _fail(str(exc))
+    typer.echo(f"latent_dir={out_dir}")
 
 
 if __name__ == "__main__":

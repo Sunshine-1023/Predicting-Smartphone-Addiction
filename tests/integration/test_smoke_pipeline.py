@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
 import pytest
+import yaml
 
+from smartphone_addiction.data.schema import ID_COLUMN, TARGET_COLUMN
 from smartphone_addiction.errors import ArtifactError, TrainingError
 from smartphone_addiction.features.base import transform_competition_frames
+from smartphone_addiction.neural.config import CORE5_FIELDS
+from smartphone_addiction.training.cv import make_folds
 from smartphone_addiction.training.runner import (
     _build_model,
     compute_training_data_hashes,
@@ -89,6 +94,112 @@ def test_lightgbm_smoke_pipeline_creates_complete_oof(
     assert 0.0 <= result.metrics["oof_auc"] <= 1.0
     assert result.store.manifest().status == "completed"
     assert (result.run_dir / "models" / "seed42-fold0.joblib").is_file()
+    resolved = yaml.safe_load((result.run_dir / "resolved_config.yaml").read_text(encoding="utf-8"))
+    assert "neural_encoder_uncertainty" not in resolved["features"]
+    assert result.store.manifest().neural_encoder_features == []
+
+
+def test_imputed_encodes_after_mask_and_records_provenance(
+    tmp_path: Path,
+    competition_frames,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    train, test, sample = competition_frames
+    recon = tmp_path / "recon"
+    recon.mkdir()
+    fold_ids = make_folds(train[TARGET_COLUMN].to_numpy(), n_splits=2, seed=42)
+    pd.DataFrame({ID_COLUMN: train[ID_COLUMN], "fold": fold_ids}).to_parquet(
+        recon / "fold_assignments.parquet"
+    )
+
+    extra_names: list[str] = []
+    for field in CORE5_FIELDS:
+        extra_names.extend([f"imputed_{field}", f"{field}_is_imputed"])
+
+    @dataclass
+    class FakeBank:
+        run_dir: Path
+        include: list[str]
+        n_splits: int
+
+        def feature_names(self) -> list[str]:
+            return list(extra_names)
+
+        def for_fold(self, fold: int) -> object:
+            return object()
+
+    captured: dict[str, object] = {}
+    calls: list[tuple[dict[str, int], bool]] = []
+
+    def fake_load(*args: object, **kwargs: object) -> FakeBank:
+        captured["kwargs"] = kwargs
+        return FakeBank(run_dir=recon, include=["imputed_core"], n_splits=2)
+
+    def fake_attach(frame, encoder, *, include):
+        missing_counts = {
+            field: int(frame[field].isna().sum())
+            for field in CORE5_FIELDS
+            if field in frame.columns
+        }
+        calls.append((missing_counts, bool(frame[ID_COLUMN].duplicated().any())))
+        out = frame.reset_index(drop=True).copy()
+        for field in CORE5_FIELDS:
+            missing = frame[field].isna().to_numpy()
+            out[f"imputed_{field}"] = pd.to_numeric(frame[field], errors="coerce").fillna(0.0)
+            out[f"{field}_is_imputed"] = missing.astype("int8")
+        return out
+
+    monkeypatch.setattr(
+        "smartphone_addiction.neural.fold_features.load_fold_encoder_bank",
+        fake_load,
+    )
+    monkeypatch.setattr(
+        "smartphone_addiction.neural.fold_features.attach_encoder_features",
+        fake_attach,
+    )
+
+    result = run_training(
+        frames=(train, test, sample),
+        model_name="lightgbm",
+        model_params=LIGHTGBM_SMOKE_PARAMS,
+        n_splits=2,
+        seeds=[42],
+        artifact_root=tmp_path / "runs",
+        git_sha="imputed01",
+        neural_encoder_run=recon,
+        neural_encoder_include=["imputed_core"],
+        masking={
+            "enabled": True,
+            "fraction": 0.20,
+            "fields": "core5",
+            "compatible_sources": False,
+            "sample_weight": False,
+        },
+        feature_groups=[
+            "raw",
+            "missingness",
+            "behavioral_totals",
+            "behavioral_deltas",
+            "log_counts",
+        ],
+        exclude_columns=["missing_pattern"],
+    )
+
+    assert "uncertainty_enabled" not in captured["kwargs"]
+    assert len(calls) == 8
+    masked_calls = [item for item in calls if item[1] or sum(item[0].values()) > 0]
+    assert masked_calls
+
+    resolved = yaml.safe_load((result.run_dir / "resolved_config.yaml").read_text(encoding="utf-8"))
+    features = resolved["features"]
+    assert "neural_encoder_uncertainty" not in features
+    assert features["neural_encoder_features"] == extra_names
+    names = json.loads((result.run_dir / "feature_names.json").read_text(encoding="utf-8"))
+    for column in extra_names:
+        assert column in names["feature_columns"]
+    manifest = result.store.manifest()
+    assert manifest.neural_encoder_features == extra_names
+    assert result.metrics["oof_coverage"] == 1.0
 
 
 def test_rejects_unsupported_model(tmp_path: Path, competition_frames) -> None:

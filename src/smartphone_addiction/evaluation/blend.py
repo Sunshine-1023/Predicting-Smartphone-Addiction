@@ -39,6 +39,7 @@ class BlendResult:
     correlation: float
     probability_auc: float
     rank_auc: float
+    selection_mode: str = "oof_grid_search"
 
 
 def _validate_vectors(y: np.ndarray, first: np.ndarray, second: np.ndarray) -> None:
@@ -123,6 +124,42 @@ def search_two_model_blend(
         correlation=correlation,
         probability_auc=best_prob[0],
         rank_auc=best_rank[0],
+        selection_mode="oof_grid_search",
+    )
+
+
+def evaluate_fixed_blend(
+    y: np.ndarray,
+    first: np.ndarray,
+    second: np.ndarray,
+    *,
+    first_weight: float,
+    method: BlendMethod,
+) -> BlendResult:
+    """Evaluate one predetermined blend method and first-model weight."""
+    weight = float(first_weight)
+    if not 0.0 <= weight <= 1.0:
+        raise TrainingError("first_weight must be in [0, 1]")
+    if method not in {"probability", "rank"}:
+        raise TrainingError(f"unknown blend method: {method!r}")
+    _validate_vectors(y, first, second)
+    labels = np.asarray(y, dtype=float)
+    a = np.asarray(first, dtype=float)
+    b = np.asarray(second, dtype=float)
+    blended = apply_blend(a, b, first_weight=weight, method=method)
+    probability = apply_probability_blend(a, b, weight)
+    rank = apply_rank_blend(a, b, weight)
+    return BlendResult(
+        first_weight=weight,
+        second_weight=1.0 - weight,
+        method=method,
+        auc=float(roc_auc_score(labels, blended)),
+        first_auc=float(roc_auc_score(labels, a)),
+        second_auc=float(roc_auc_score(labels, b)),
+        correlation=float(np.corrcoef(a, b)[0, 1]) if len(a) > 1 else 0.0,
+        probability_auc=float(roc_auc_score(labels, probability)),
+        rank_auc=float(roc_auc_score(labels, rank)),
+        selection_mode="fixed",
     )
 
 
@@ -147,13 +184,18 @@ def blend_run_predictions(
     second_run_dir: Path | str,
     output_dir: Path | str,
     step: float = 0.05,
+    fixed_method: BlendMethod | None = None,
+    fixed_first_weight: float | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
     """Blend OOF/test predictions from two completed runs and write artifacts.
 
     Writes into a staging directory first and publishes ``manifest.json`` last.
     Refuses to overwrite an existing non-empty ``output_dir`` unless ``force``.
+    Fixed mode requires both ``fixed_method`` and ``fixed_first_weight``.
     """
+    if (fixed_method is None) != (fixed_first_weight is None):
+        raise TrainingError("fixed blend requires both method and first_weight")
     first_dir = Path(first_run_dir)
     second_dir = Path(second_run_dir)
     output_dir = Path(output_dir)
@@ -175,6 +217,8 @@ def blend_run_predictions(
             output_dir=staging,
             final_run_id=output_dir.name,
             step=step,
+            fixed_method=fixed_method,
+            fixed_first_weight=fixed_first_weight,
         )
         _publish_directory(staging, output_dir)
     except Exception:
@@ -190,12 +234,23 @@ def _write_blend_artifacts(
     output_dir: Path,
     final_run_id: str,
     step: float,
+    fixed_method: BlendMethod | None = None,
+    fixed_first_weight: float | None = None,
 ) -> dict[str, Any]:
     first_oof = pd.read_parquet(first_dir / "oof_predictions.parquet")
     second_oof = pd.read_parquet(second_dir / "oof_predictions.parquet")
     base_ids, y, first_oof_pred, second_oof_pred = _aligned_oof_vectors(first_oof, second_oof)
 
-    result = search_two_model_blend(y, first_oof_pred, second_oof_pred, step=step)
+    if fixed_method is not None and fixed_first_weight is not None:
+        result = evaluate_fixed_blend(
+            y,
+            first_oof_pred,
+            second_oof_pred,
+            first_weight=fixed_first_weight,
+            method=fixed_method,
+        )
+    else:
+        result = search_two_model_blend(y, first_oof_pred, second_oof_pred, step=step)
 
     oof_blend = apply_blend(
         first_oof_pred,
@@ -236,11 +291,16 @@ def _write_blend_artifacts(
     )
     metrics = {
         "oof_auc": result.auc,
-        "oof_auc_note": "in_sample_weight_search_on_oof",
+        "oof_auc_note": (
+            "fixed_weight_on_oof"
+            if result.selection_mode == "fixed"
+            else "in_sample_weight_search_on_oof"
+        ),
         "model_name": f"blend-{result.method}",
         "first_weight": result.first_weight,
         "second_weight": result.second_weight,
         "method": result.method,
+        "selection_mode": result.selection_mode,
         "first_auc": result.first_auc,
         "second_auc": result.second_auc,
         "correlation": result.correlation,

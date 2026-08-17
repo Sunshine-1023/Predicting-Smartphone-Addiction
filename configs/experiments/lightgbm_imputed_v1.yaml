@@ -1,6 +1,5 @@
-# LightGBM masked-v3 + fold-local MLP latent (gate-2 ablation).
-# Encoder: artifacts/reconstruction/20260815T155822Z-mlp-mae-3238f7c
-# Do not change tree params / masking relative to lightgbm_masked_v3.yaml.
+# LightGBM masked-v3 + fold-native missing-only imputation (gate-2 redo).
+# Uses encoder_f inside each LightGBM fold; averages test probabilities, not latents.
 features:
   groups:
     - raw
@@ -16,10 +15,11 @@ features:
     fields: core5
     compatible_sources: false
     sample_weight: false
-  latent:
-    directory: artifacts/reconstruction/20260815T155822Z-mlp-mae-3238f7c/latent  # pragma: allowlist secret
+  neural_encoder:
+    reconstruction_run: artifacts/reconstruction/20260815T170953Z-mlp-mae-c7fbc69  # pragma: allowlist secret
     include:
-      - latent
+      - imputed_core
+    device: mps
 model:
   name: lightgbm
   params:

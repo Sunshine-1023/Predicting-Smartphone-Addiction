@@ -8,6 +8,7 @@ import pytest
 
 from smartphone_addiction.config import CVConfig, load_config
 from smartphone_addiction.errors import ConfigurationError
+from smartphone_addiction.features.domain import columns_for_groups
 from smartphone_addiction.paths import project_root
 
 
@@ -151,6 +152,21 @@ def test_masked_v3_experiment_loads() -> None:
     assert config.model.params["reg_alpha"] == 1.0
     assert config.model.params["reg_lambda"] == 10.0
     assert config.model.params["path_smooth"] == 5.0
+    assert config.features.groups == [
+        "raw",
+        "missingness",
+        "behavioral_totals",
+        "behavioral_deltas",
+        "log_counts",
+    ]
+    v3_cols = [
+        column
+        for column in columns_for_groups(config.features.groups)
+        if column not in config.features.exclude_columns
+    ]
+    assert len(v3_cols) == 34
+    assert config.features.masking.fraction == 0.20
+    assert config.features.neural_encoder.reconstruction_run is None
 
 
 def test_duplicate_seeds_rejected() -> None:

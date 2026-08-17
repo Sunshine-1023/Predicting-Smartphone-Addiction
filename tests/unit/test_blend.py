@@ -13,6 +13,7 @@ from smartphone_addiction.data.schema import ID_COLUMN, TARGET_COLUMN
 from smartphone_addiction.errors import TrainingError
 from smartphone_addiction.evaluation.blend import (
     blend_run_predictions,
+    evaluate_fixed_blend,
     search_two_model_blend,
 )
 
@@ -192,6 +193,105 @@ def test_blend_allows_different_feature_hashes(tmp_path: Path) -> None:
         output_dir=tmp_path / "blend",
     )
     assert payload["auc"] >= 0.5
+
+
+def test_evaluate_fixed_blend_keeps_requested_weights() -> None:
+    y = np.array([0, 0, 1, 1])
+    first = np.array([0.1, 0.4, 0.6, 0.9])
+    second = np.array([0.2, 0.3, 0.8, 0.7])
+    result = evaluate_fixed_blend(
+        y,
+        first,
+        second,
+        first_weight=0.60,
+        method="probability",
+    )
+    assert result.first_weight == pytest.approx(0.60)
+    assert result.second_weight == pytest.approx(0.40)
+    assert result.method == "probability"
+    assert result.selection_mode == "fixed"
+
+
+def test_evaluate_fixed_blend_rejects_out_of_range_weight() -> None:
+    y = np.array([0, 1])
+    first = np.array([0.1, 0.9])
+    second = np.array([0.2, 0.8])
+    with pytest.raises(TrainingError, match="first_weight"):
+        evaluate_fixed_blend(y, first, second, first_weight=-0.1, method="probability")
+    with pytest.raises(TrainingError, match="first_weight"):
+        evaluate_fixed_blend(y, first, second, first_weight=1.1, method="probability")
+
+
+def test_fixed_blend_run_records_selection_mode(tmp_path: Path) -> None:
+    ids = np.arange(4)
+    y = np.array([0, 0, 1, 1])
+    oof = pd.DataFrame({ID_COLUMN: ids, TARGET_COLUMN: y, "prediction": [0.1, 0.2, 0.8, 0.9]})
+    test = pd.DataFrame({ID_COLUMN: [10, 11], "prediction": [0.4, 0.6]})
+    hashes = {"train.csv": "same"}
+    run_a = tmp_path / "run_a"
+    run_b = tmp_path / "run_b"
+    _write_completed_run(run_a, oof, test, data_hashes=hashes)
+    _write_completed_run(run_b, oof, test, data_hashes=hashes)
+    out = tmp_path / "blend-fixed"
+    payload = blend_run_predictions(
+        first_run_dir=run_a,
+        second_run_dir=run_b,
+        output_dir=out,
+        fixed_method="probability",
+        fixed_first_weight=0.60,
+    )
+    assert payload["selection_mode"] == "fixed"
+    assert payload["first_weight"] == pytest.approx(0.60)
+    assert payload["second_weight"] == pytest.approx(0.40)
+    assert payload["method"] == "probability"
+    metrics = json.loads((out / "metrics.json").read_text(encoding="utf-8"))
+    manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    blend_result = json.loads((out / "blend_result.json").read_text(encoding="utf-8"))
+    assert metrics["selection_mode"] == "fixed"
+    assert manifest["metrics"]["selection_mode"] == "fixed"
+    assert blend_result["selection_mode"] == "fixed"
+
+
+def test_search_blend_run_records_oof_grid_search(tmp_path: Path) -> None:
+    ids = np.arange(4)
+    y = np.array([0, 0, 1, 1])
+    oof = pd.DataFrame({ID_COLUMN: ids, TARGET_COLUMN: y, "prediction": [0.1, 0.2, 0.8, 0.9]})
+    test = pd.DataFrame({ID_COLUMN: [10, 11], "prediction": [0.4, 0.6]})
+    hashes = {"train.csv": "same"}
+    run_a = tmp_path / "run_a"
+    run_b = tmp_path / "run_b"
+    _write_completed_run(run_a, oof, test, data_hashes=hashes)
+    _write_completed_run(run_b, oof, test, data_hashes=hashes)
+    out = tmp_path / "blend-search"
+    payload = blend_run_predictions(first_run_dir=run_a, second_run_dir=run_b, output_dir=out)
+    assert payload["selection_mode"] == "oof_grid_search"
+    metrics = json.loads((out / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics["selection_mode"] == "oof_grid_search"
+
+
+def test_blend_run_rejects_partial_fixed_args(tmp_path: Path) -> None:
+    ids = np.arange(4)
+    y = np.array([0, 0, 1, 1])
+    oof = pd.DataFrame({ID_COLUMN: ids, TARGET_COLUMN: y, "prediction": [0.1, 0.2, 0.8, 0.9]})
+    test = pd.DataFrame({ID_COLUMN: [10, 11], "prediction": [0.4, 0.6]})
+    run_a = tmp_path / "run_a"
+    run_b = tmp_path / "run_b"
+    _write_completed_run(run_a, oof, test)
+    _write_completed_run(run_b, oof, test)
+    with pytest.raises(TrainingError, match="both"):
+        blend_run_predictions(
+            first_run_dir=run_a,
+            second_run_dir=run_b,
+            output_dir=tmp_path / "blend",
+            fixed_method="probability",
+        )
+    with pytest.raises(TrainingError, match="both"):
+        blend_run_predictions(
+            first_run_dir=run_a,
+            second_run_dir=run_b,
+            output_dir=tmp_path / "blend",
+            fixed_first_weight=0.6,
+        )
 
 
 def test_blend_rejects_incomplete_source_run(tmp_path: Path) -> None:

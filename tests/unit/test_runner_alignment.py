@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from smartphone_addiction.errors import AlignmentError, ArtifactError
+from smartphone_addiction.training import runner as training_runner
 from smartphone_addiction.training.runner import _load_fold_predictions
 
 
@@ -108,3 +110,10 @@ def test_load_fold_rejects_index_mismatch(tmp_path: Path) -> None:
             expected_valid_index=np.array([0, 1]),
             label="idx",
         )
+
+
+def test_encoder_attach_happens_after_mask() -> None:
+    source = inspect.getsource(training_runner.run_training)
+    mask_at = source.index("augment_training_fold")
+    attach_at = source.index("x_train = attach_encoder_features")
+    assert mask_at < attach_at

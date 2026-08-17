@@ -15,11 +15,13 @@ with `features.groups`, typed YAML config, OOF runner (smoke/dev/final),
 rank/probability blend, submission builder + Kaggle CLI upload (`make submit`),
 offline Kaggle packaging, pre-commit + GitHub Actions.
 
-**Completed (2026-08-13):** winning LightGBM recipe `lightgbm_masked_v3.yaml`
-(masking 0.20; 34 features; `max_bin=1023`, `num_leaves=95`, `min_child_samples=200`,
-`reg_alpha=1`, `reg_lambda=10`, `path_smooth=5`). Public LB **0.96781** (OOF 0.96663).
-Previous recipe `lightgbm_masked_v2.yaml` scored Public LB **0.96543**. See
-`reports/final_report.md`, `reports/submissions.csv`, and
+**Completed (2026-08-16):** current best is C1, a probability blend
+`0.60 * lightgbm_masked_v3` (3-seed) `+ 0.40 *` fold-native imputed LightGBM.
+Public LB **0.96803** (OOF 0.96686). The tree recipe remains
+`lightgbm_masked_v3.yaml` (masking 0.20; 34 features; `max_bin=1023`,
+`num_leaves=95`, `min_child_samples=200`, `reg_alpha=1`, `reg_lambda=10`,
+`path_smooth=5`). Previous 3-seed v3 Public LB **0.96781** (OOF 0.96663).
+See `reports/final_report.md`, `reports/submissions.csv`, and
 `reports/experiment_summary.csv`.
 
 **Not pursued:** Optuna tuning. Archived tune/finalist configs live under
@@ -34,8 +36,9 @@ Previous recipe `lightgbm_masked_v2.yaml` scored Public LB **0.96543**. See
 - **数据**：只用官方 `train.csv` / `test.csv` / `sample_submission.csv`；
   原始文件只读，处理后的特征写在 `data/processed/`（clone 后需 `make features`）。
 - **验证**：分层 K 折 OOF；final 阶段 5-fold × seeds `42, 2026, 3407`。
-- **最佳提交**：LightGBM `lightgbm_masked_v3`（34 列 + masking 0.20 + 定向搜索参数），
-  Public LB **0.96781**（OOF 0.96663）。此前 `lightgbm_masked_v2` 为 0.96543。
+- **最佳提交**：C1 概率融合（`0.60 ×` 3-seed `lightgbm_masked_v3` `+ 0.40 ×` fold-native imputed），
+  Public LB **0.96803**（OOF 0.96686）。树模型配方仍为 `lightgbm_masked_v3`
+  （34 列 + masking 0.20 + 定向搜索参数）；此前单独 3-seed v3 为 0.96781。
 - **报告**：`reports/final_report.md`、`reports/data_validation.md`。
 
 设计与实施文档见 `plan/2026-08-06-data-processing-implementation.md`。

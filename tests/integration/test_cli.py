@@ -177,3 +177,88 @@ def test_cli_train_smoke_raw(tmp_path: Path, competition_frames, monkeypatch) ->
     real_summary = real_root / "reports" / "experiment_summary.csv"
     if real_summary.is_file():
         assert str(run_id) not in real_summary.read_text(encoding="utf-8")
+
+
+def _write_cli_blend_runs(tmp_path: Path) -> tuple[Path, Path]:
+    ids = np.arange(6)
+    y = np.array([0, 0, 0, 1, 1, 1])
+    oof = pd.DataFrame(
+        {ID_COLUMN: ids, TARGET_COLUMN: y, "prediction": [0.1, 0.2, 0.3, 0.7, 0.8, 0.9]}
+    )
+    test = pd.DataFrame({ID_COLUMN: [10, 11], "prediction": [0.4, 0.6]})
+    run_a = tmp_path / "run_a"
+    run_b = tmp_path / "run_b"
+    for run in (run_a, run_b):
+        run.mkdir()
+        oof.to_parquet(run / "oof_predictions.parquet", index=False)
+        test.to_parquet(run / "test_predictions.parquet", index=False)
+        (run / "manifest.json").write_text(
+            json.dumps({"status": "completed", "run_id": run.name, "n_train_rows": len(oof)}),
+            encoding="utf-8",
+        )
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    return run_a, run_b
+
+
+def test_cli_blend_fixed_weight_requires_both_flags(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / ".smartphone_addiction_root").write_text("", encoding="utf-8")
+    monkeypatch.setenv("SMARTPHONE_ADDICTION_ROOT", str(tmp_path))
+    run_a, run_b = _write_cli_blend_runs(tmp_path)
+    method_only = runner.invoke(
+        app,
+        [
+            "blend",
+            "--runs",
+            str(run_a),
+            "--runs",
+            str(run_b),
+            "--output-dir",
+            str(tmp_path / "blends" / "method-only"),
+            "--method",
+            "probability",
+        ],
+    )
+    assert method_only.exit_code != 0
+    weight_only = runner.invoke(
+        app,
+        [
+            "blend",
+            "--runs",
+            str(run_a),
+            "--runs",
+            str(run_b),
+            "--output-dir",
+            str(tmp_path / "blends" / "weight-only"),
+            "--first-weight",
+            "0.6",
+        ],
+    )
+    assert weight_only.exit_code != 0
+
+
+def test_cli_blend_fixed_weight_writes_selection_mode(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / ".smartphone_addiction_root").write_text("", encoding="utf-8")
+    monkeypatch.setenv("SMARTPHONE_ADDICTION_ROOT", str(tmp_path))
+    run_a, run_b = _write_cli_blend_runs(tmp_path)
+    out = tmp_path / "blends" / "fixed"
+    result = runner.invoke(
+        app,
+        [
+            "blend",
+            "--runs",
+            str(run_a),
+            "--runs",
+            str(run_b),
+            "--output-dir",
+            str(out),
+            "--method",
+            "probability",
+            "--first-weight",
+            "0.60",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads((out / "blend_result.json").read_text(encoding="utf-8"))
+    assert payload["selection_mode"] == "fixed"
+    assert payload["first_weight"] == pytest.approx(0.60)
+    assert payload["method"] == "probability"
