@@ -172,39 +172,3 @@ def evaluate_reconstruction_gate(
         reasons=tuple(reasons),
         field_summary=summary,
     )
-
-
-def select_encoder_winner(
-    decisions: dict[str, GateDecision],
-    field_metrics: dict[str, pd.DataFrame],
-) -> str | None:
-    """Pick MLP vs TabM using the plan's tie-breakers. None if nobody passed."""
-    passed = {name: decision for name, decision in decisions.items() if decision.passed}
-    if not passed:
-        return None
-    if len(passed) == 1:
-        return next(iter(passed))
-
-    def top3_rmse_improvement(name: str) -> float:
-        metrics = field_metrics[name]
-        oof = metrics.loc[(metrics["fold"] == "oof") & (metrics["field"].isin(TOP3_CORE_FIELDS))]
-        values = oof["rmse_improvement"].to_numpy(dtype=float)
-        values = values[np.isfinite(values)]
-        return float(values.mean()) if len(values) else float("-inf")
-
-    def fold_volatility(name: str) -> float:
-        metrics = field_metrics[name]
-        folds = metrics.loc[metrics["fold"] != "oof", "rmse_improvement"].to_numpy(dtype=float)
-        folds = folds[np.isfinite(folds)]
-        return float(np.std(folds, ddof=0)) if len(folds) else float("inf")
-
-    ranked = sorted(
-        passed,
-        key=lambda name: (
-            -passed[name].n_passing_fields,
-            -top3_rmse_improvement(name),
-            fold_volatility(name),
-            0 if name == "mlp" else 1,
-        ),
-    )
-    return ranked[0]

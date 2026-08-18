@@ -20,7 +20,6 @@ from smartphone_addiction.neural.config import CORE5_FIELDS, NeuralModelArchConf
 from smartphone_addiction.neural.device import require_torch, resolve_device
 from smartphone_addiction.neural.masking import MaskBatch, move_mask_batch
 from smartphone_addiction.neural.preprocessing import FoldTensorizer, TensorizedFrame
-from smartphone_addiction.neural.tabm import build_tabm_autoencoder
 
 
 def unmasked_batch(frame: TensorizedFrame, tensorizer: FoldTensorizer) -> MaskBatch:
@@ -117,11 +116,9 @@ def _load_checkpoint(path: Path) -> dict[str, Any]:
 
 
 def _build_model(model_name: str, vocab_sizes: list[int], arch: NeuralModelArchConfig):
-    if model_name == "mlp":
-        return build_mlp_autoencoder(vocab_sizes, arch)
-    if model_name == "tabm":
-        return build_tabm_autoencoder(vocab_sizes, arch)
-    raise TrainingError(f"unsupported reconstruction model for latent export: {model_name}")
+    if model_name != "mlp":
+        raise TrainingError(f"unsupported reconstruction model for latent export: {model_name}")
+    return build_mlp_autoencoder(vocab_sizes, arch)
 
 
 def export_latents_from_run(

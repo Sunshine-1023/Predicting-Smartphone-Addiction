@@ -1,0 +1,28 @@
+device: auto
+model:
+  name: lookup_transformer
+  hidden_dim: 128
+  n_blocks: 4
+  n_heads: 8
+  feedforward_dim: 512
+  dropout: 0.10
+training:
+  loss: bce
+  optimizer: adamw
+  learning_rate: 0.0005
+  weight_decay: 0.0001
+  batch_size: 2048
+  max_epochs: 80
+  early_stopping_patience: 10
+  gradient_clip_norm: 1.0
+  holdout_fraction: 0.10
+  dtype: float32
+  seed: 42
+encoding:
+  include_unlabeled_vocab: false
+gate:
+  oof_auc_min: 0.9680
+  probe_auc_min: 0.9650
+  coverage_min: 1.0
+  min_folds: 5
+  incomplete_auc_min: null

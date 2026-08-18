@@ -7,7 +7,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from smartphone_addiction.errors import TrainingError
-from smartphone_addiction.neural.losses import masked_huber_loss
+from smartphone_addiction.neural.losses import binary_bce_with_logits, masked_huber_loss
 
 
 def test_empty_loss_mask_raises() -> None:
@@ -39,3 +39,11 @@ def test_ensemble_predictions_broadcast_mask() -> None:
     loss = masked_huber_loss(predictions, targets, mask, delta=1.0)
     assert torch.isfinite(loss)
     assert loss.item() > 0
+
+
+def test_binary_bce_matches_torch() -> None:
+    logits = torch.tensor([0.0, 2.0])
+    labels = torch.tensor([0.0, 1.0])
+    loss = binary_bce_with_logits(logits, labels)
+    expected = torch.nn.functional.binary_cross_entropy_with_logits(logits, labels)
+    assert torch.allclose(loss, expected)

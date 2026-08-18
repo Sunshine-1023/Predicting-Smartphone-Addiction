@@ -67,7 +67,9 @@ features_app = typer.Typer(help="Build processed feature tables.")
 submission_app = typer.Typer(help="Build and validate submission CSV files.")
 report_app = typer.Typer(help="Publish selected experiment summaries.")
 package_app = typer.Typer(help="Build offline packages.")
-neural_app = typer.Typer(help="Optional MPS masked-autoencoder reconstruction (requires [neural]).")
+neural_app = typer.Typer(
+    help="Optional neural reconstruction and Lookup Transformer classification (requires [neural])."
+)
 app.add_typer(data_app, name="data")
 app.add_typer(features_app, name="features")
 app.add_typer(submission_app, name="submission")
@@ -910,7 +912,6 @@ def neural_reconstruct(
         "--config",
         help="Reconstruction experiment YAML",
     ),
-    model: str = typer.Option("mlp", "--model", help="mlp or tabm"),
     smoke: bool = typer.Option(False, "--smoke", help="20k rows, 1 fold, 2 epochs"),
     device: str | None = typer.Option(None, "--device", help="auto, mps, or cpu"),
 ) -> None:
@@ -925,7 +926,7 @@ def neural_reconstruct(
 
         run_dir = run_reconstruction_from_yaml(
             paths,
-            model_name=model,
+            model_name="mlp",
             smoke=smoke,
             device=device,
         )
@@ -939,6 +940,53 @@ def neural_reconstruct(
         payload = json.loads(gate_path.read_text(encoding="utf-8"))
         typer.echo(f"gate_passed={payload.get('passed')}")
         typer.echo(f"smoke={payload.get('smoke')}")
+
+
+@neural_app.command("classify")
+def neural_classify(
+    config: Path = typer.Option(
+        Path("configs/experiments/lookup_transformer_v1.yaml"),
+        "--config",
+        help="Supervised neural classification experiment YAML",
+    ),
+    smoke: bool = typer.Option(False, "--smoke", help="20k rows, 1 fold, 2 epochs"),
+    device: str | None = typer.Option(None, "--device", help="auto, mps, or cpu"),
+    only_fold: int | None = typer.Option(None, "--only-fold", help="Run a single outer fold"),
+) -> None:
+    """Train fold-local Lookup Transformer and write OOF probabilities."""
+    root = project_root()
+    arch = root / "configs" / "neural" / "lookup_transformer_v1.yaml"
+    experiment = resolve_path(config, root)
+    paths = [experiment]
+    if arch.is_file():
+        paths = [arch, experiment]
+    try:
+        from smartphone_addiction.neural.classification import run_classification_from_yaml
+
+        run_dir = run_classification_from_yaml(
+            paths,
+            smoke=smoke,
+            device=device,
+            only_fold=only_fold,
+        )
+    except ImportError as exc:
+        _fail(str(exc))
+    except DOMAIN_ERRORS as exc:
+        _fail(str(exc))
+    typer.echo(f"run_dir={run_dir}")
+    metrics_path = run_dir / "metrics.json"
+    if metrics_path.is_file():
+        metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+        typer.echo(f"oof_auc={metrics.get('oof_auc')}")
+        typer.echo(f"core_incomplete_auc={metrics.get('core_incomplete_auc')}")
+        typer.echo(f"oof_coverage={metrics.get('oof_coverage')}")
+    gate_path = run_dir / "gate_decision.json"
+    if gate_path.is_file():
+        payload = json.loads(gate_path.read_text(encoding="utf-8"))
+        typer.echo(f"gate_passed={payload.get('passed')}")
+        typer.echo(f"smoke={payload.get('smoke')}")
+        if payload.get("probe"):
+            typer.echo(f"probe_auc_min={payload.get('probe_auc_min')}")
 
 
 @neural_app.command("export-latent")

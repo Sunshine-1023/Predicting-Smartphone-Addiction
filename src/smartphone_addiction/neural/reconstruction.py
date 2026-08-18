@@ -43,7 +43,6 @@ from smartphone_addiction.neural.masking import (
     subset_mask_batch,
 )
 from smartphone_addiction.neural.preprocessing import FoldTensorizer, TensorizedFrame
-from smartphone_addiction.neural.tabm import build_tabm_autoencoder
 from smartphone_addiction.neural.trainer import train_reconstruction_model
 from smartphone_addiction.training.cv import make_folds
 
@@ -97,11 +96,7 @@ def _subset_tensorized(frame: TensorizedFrame, index: np.ndarray) -> TensorizedF
 
 
 def _build_model(config: NeuralReconstructionConfig, vocab_sizes: list[int]):
-    if config.model.name == "mlp":
-        return build_mlp_autoencoder(vocab_sizes, config.model)
-    if config.model.name == "tabm":
-        return build_tabm_autoencoder(vocab_sizes, config.model)
-    raise TrainingError(f"unsupported reconstruction model: {config.model.name}")
+    return build_mlp_autoencoder(vocab_sizes, config.model)
 
 
 def _predict_bank(

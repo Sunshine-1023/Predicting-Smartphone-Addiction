@@ -19,7 +19,6 @@ def test_neural_yaml_loads_with_defaults() -> None:
         resolve=False,
     )
     assert config.model.latent_dim == 32
-    assert config.model.ensemble_size == 4
     assert config.training.batch_size == 4096
     assert config.training.max_epochs == 50
     assert config.masking.max_fields == 3

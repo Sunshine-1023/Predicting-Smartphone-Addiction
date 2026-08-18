@@ -262,3 +262,10 @@ def test_cli_blend_fixed_weight_writes_selection_mode(tmp_path: Path, monkeypatc
     assert payload["selection_mode"] == "fixed"
     assert payload["first_weight"] == pytest.approx(0.60)
     assert payload["method"] == "probability"
+
+
+def test_cli_neural_help_lists_classify() -> None:
+    result = runner.invoke(app, ["neural", "--help"])
+    assert result.exit_code == 0
+    assert "classify" in result.stdout
+    assert "reconstruct" in result.stdout

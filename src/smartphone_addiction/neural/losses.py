@@ -44,3 +44,15 @@ def masked_huber_loss(
     element = 0.5 * quadratic.square() + delta * linear
     weights = mask.to(dtype=element.dtype)
     return element.mul(weights).sum() / weights.sum()
+
+
+def binary_bce_with_logits(logits, labels):
+    """Binary cross-entropy for one logit per row."""
+    torch = require_torch()
+    logits = logits.reshape(-1)
+    target = labels.reshape(-1).to(dtype=logits.dtype)
+    if target.shape != logits.shape:
+        raise TrainingError(
+            f"label/logit batch mismatch: {tuple(target.shape)} vs {tuple(logits.shape)}"
+        )
+    return torch.nn.functional.binary_cross_entropy_with_logits(logits, target)

@@ -18,7 +18,6 @@ from smartphone_addiction.neural.config import CORE5_FIELDS, NeuralModelArchConf
 from smartphone_addiction.neural.device import require_torch, resolve_device
 from smartphone_addiction.neural.export import encode_latent
 from smartphone_addiction.neural.preprocessing import FoldTensorizer
-from smartphone_addiction.neural.tabm import build_tabm_autoencoder
 
 IncludeKind = Literal["imputed_core", "latent"]
 
@@ -137,12 +136,9 @@ def load_fold_encoder_bank(
         fold = int(checkpoint.stem.split("_")[1])
         payload = _load_checkpoint(checkpoint)
         tensorizer = FoldTensorizer.from_state(payload["tensorizer"])
-        if model_name == "mlp":
-            model = build_mlp_autoencoder(tensorizer.vocab_sizes(), arch)
-        elif model_name == "tabm":
-            model = build_tabm_autoencoder(tensorizer.vocab_sizes(), arch)
-        else:
+        if model_name != "mlp":
             raise TrainingError(f"unsupported encoder model: {model_name}")
+        model = build_mlp_autoencoder(tensorizer.vocab_sizes(), arch)
         model.load_state_dict(payload["model_state"])
         model.to(device_obj)
         model.eval()

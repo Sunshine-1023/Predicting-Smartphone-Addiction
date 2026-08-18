@@ -51,17 +51,16 @@ class NeuralArtifactConfig(BaseModel):
 class NeuralModelArchConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    name: Literal["mlp", "tabm"] = "mlp"
+    name: Literal["mlp"] = "mlp"
     hidden_dim: int = 128
     latent_dim: int = 32
     n_blocks: int = 3
     dropout: float = 0.10
     activation: Literal["gelu"] = "gelu"
     normalization: Literal["layer_norm"] = "layer_norm"
-    ensemble_size: int = 4
     embedding_dim: int = 8
 
-    @field_validator("hidden_dim", "latent_dim", "n_blocks", "ensemble_size", "embedding_dim")
+    @field_validator("hidden_dim", "latent_dim", "n_blocks", "embedding_dim")
     @classmethod
     def _positive(cls, value: int) -> int:
         if value < 1:

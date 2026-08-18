@@ -7,7 +7,6 @@ model:
   dropout: 0.10
   activation: gelu
   normalization: layer_norm
-  ensemble_size: 4
   embedding_dim: 8
 training:
   loss: huber
